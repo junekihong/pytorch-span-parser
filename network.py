@@ -9,129 +9,114 @@ import time
 import random
 import sys
 
-import dynet
+#import dynet
 import numpy as np
+
+import torch
+import torch.nn as nn
+import torch.autograd as autograd
+import torch.functional as F
+import torch.optim as optim
 
 from phrase_tree import PhraseTree, FScore
 from features import FeatureMapper
 from parser import Parser
 
-class LSTM(object):
-    """
-    LSTM class with initial state as parameter, and all parameters
-        initialized in [-0.01, 0.01].
-    """
+from constants import GPU
+torch.manual_seed(1)
 
-    number = 0
+from pprint import pprint
 
-    def __init__(self, input_dims, output_dims, model):
-        self.input_dims = input_dims
-        self.output_dims = output_dims
-        self.model = model
 
-        self.W_i = model.add_parameters(
-            (output_dims, input_dims + output_dims),
-            init=dynet.UniformInitializer(0.01),
-        )
-        self.b_i = model.add_parameters(
-            (output_dims,),
-            init=dynet.ConstInitializer(0),
-        )
-        self.W_f = model.add_parameters(
-            (output_dims, input_dims + output_dims),
-            init=dynet.UniformInitializer(0.01),
-        )
-        self.b_f = model.add_parameters(
-            (output_dims,),
-            init=dynet.ConstInitializer(0),
-        )
-        self.W_c = model.add_parameters(
-            (output_dims, input_dims + output_dims),
-            init=dynet.UniformInitializer(0.01),
-        )
-        self.b_c = model.add_parameters(
-            (output_dims,),
-            init=dynet.ConstInitializer(0),
-        )
-        self.W_o = model.add_parameters(
-            (output_dims, input_dims + output_dims),
-            init=dynet.UniformInitializer(0.01),
-        )
-        self.b_o = model.add_parameters(
-            (output_dims,),
-            init=dynet.ConstInitializer(0),
-        )
-        self.c0 = model.add_parameters(
-            (output_dims,),
-            init=dynet.ConstInitializer(0),
-        )
-
-        self.W_params = [self.W_i, self.W_f, self.W_c, self.W_o]
-        self.b_params = [self.b_i, self.b_f, self.b_c, self.b_o]
-        self.params = self.W_params + self.b_params + [self.c0]
+class SubNetwork(nn.Module):
     
-    class State(object):
+    def __init__(
+            self,
+            word_count, tag_count,
+            word_dims, tag_dims,
+            lstm_units,
+            hidden_units,
+            out_dim,
+            droprate,
+            spans,
+    ):
+        super(SubNetwork, self).__init__()
+        
+        self.lstm_units = lstm_units
+        self.hidden_units = hidden_units
+        self.out_dim = out_dim
+        self.droprate = droprate
+        self.spans = spans
 
-        def __init__(self, lstm):
-            self.lstm = lstm
+        #self.drop = nn.Dropout(droprate)
 
-            self.outputs = []
+        """
+        self.word_embed = nn.Embedding(word_count, word_dims).cuda(GPU)
+        self.tag_embed = nn.Embedding(tag_count, tag_dims).cuda(GPU)
 
-            self.c = dynet.parameter(self.lstm.c0)
-            self.h = dynet.tanh(self.c)
+        self.lstm = nn.LSTM(word_dims + tag_dims,
+                            lstm_units,
+                            num_layers=2,
+                            bidirectional=True).cuda(GPU)
+        
+        """
 
-            self.W_i = dynet.parameter(self.lstm.W_i)
-            self.b_i = dynet.parameter(self.lstm.b_i)
+        self.span2hidden = nn.Linear(2 * spans * lstm_units, hidden_units).cuda(GPU)
+        self.hidden2out = nn.Linear(hidden_units, out_dim).cuda(GPU)
+        self.hidden = self.init_hidden()
 
-            self.W_f = dynet.parameter(self.lstm.W_f)
-            self.b_f = dynet.parameter(self.lstm.b_f)
+    def init_hidden(self):
+        return autograd.Variable(torch.zeros(1, 1, self.hidden_units)).cuda(GPU)
 
-            self.W_c = dynet.parameter(self.lstm.W_c)
-            self.b_c = dynet.parameter(self.lstm.b_c)
+    """
+    def evaluate_recurrent(self, word_inds, tag_inds, test=False):
+        sentence = []
+        wordvecs = self.word_embed(word_inds)
+        tagvecs = self.tag_embed(tag_inds)
+        wordvecs = wordvecs.view(self.word_dims, len(word_inds))
+        tagvecs = tagvecs.view(self.tag_dims, len(tag_inds))
 
-            self.W_o = dynet.parameter(self.lstm.W_o)
-            self.b_o = dynet.parameter(self.lstm.b_o)
+        sentence = torch.cat([wordvecs, tagvecs])
+        sentence = sentence.view(-1, 1, len(sentence))
+        lstm_out, self.hidden = self.lstm(sentence)
+    """
+
+    def forward(self, embeddings, lefts, rights, test=False):
+        #print("reminder, the input size for the fully connected layer is:", 2*self.spans*self.lstm_units)
+        #print("that is: {} spans, {} lstm_units, * 2".format(self.spans, self.lstm_units))
+
+        span_out = []
+        for left_index, right_index in zip(lefts, rights):
+            embedding = embeddings[right_index] - embeddings[left_index - 1]
+            span_out.append(embedding.view(embedding.size()[1]))
+            #span_out.append(embedding)
+
+        #print(len(span_out))
+        #print(span_out[0].size())
+        hidden_input = torch.cat(span_out)
+        hidden_input = hidden_input.view((1, len(hidden_input)))
+        
+        #print("num elements of span_out:", len(span_out), span_out[0].size())
+
+        #print("hidden input:")
+        #print(hidden_input.size())
+        
+        if self.droprate > 0 and not test:
+            pass
+            #hidden_input = dynet.dropout(hidden_input, self.droprate)
+        hidden_output = self.span2hidden(hidden_input)
+        scores = self.hidden2out(hidden_output)
+        return scores
 
 
-        def add_input(self, input_vec):
-            """
-            Note that this function updates the existing State object!
-            """
-            x = dynet.concatenate([input_vec, self.h])
-
-            i = dynet.logistic(self.W_i * x + self.b_i)
-            f = dynet.logistic(self.W_f * x + self.b_f)
-            g = dynet.tanh(self.W_c * x + self.b_c)
-            o = dynet.logistic(self.W_o * x + self.b_o)
-
-            c = dynet.cwise_multiply(f, self.c) + dynet.cwise_multiply(i, g)
-            h = dynet.cwise_multiply(o, dynet.tanh(c))
-
-            self.c = c
-            self.h = h
-            self.outputs.append(h)
-
-            return self
 
 
-        def output(self):
-            return self.outputs[-1]
-
-
-    def initial_state(self):
-        return LSTM.State(self)
-
-
-
-
-class Network(object):
+class Network(nn.Module):
 
     def __init__(
         self,
-        word_count,
-        tag_count,
-        word_dims,
-        tag_dims,
+        word_count, tag_count,
+        word_dims, tag_dims,
         lstm_units,
         hidden_units,
         struct_out,
@@ -140,6 +125,8 @@ class Network(object):
         struct_spans=4,
         label_spans=3,
     ):
+
+        super(Network, self).__init__()
 
         self.word_count = word_count
         self.tag_count = tag_count
@@ -152,193 +139,100 @@ class Network(object):
 
         self.droprate = droprate
 
-        self.model = dynet.Model()
+        #self.model = dynet.Model()
+        self.word_embed = nn.Embedding(word_count, word_dims).cuda(GPU)
+        self.tag_embed = nn.Embedding(tag_count, tag_dims).cuda(GPU)
+        
 
-        self.trainer = dynet.AdadeltaTrainer(self.model, eps=1e-7, rho=0.99)
-        random.seed(1)
-
-        self.activation = dynet.rectify
-
-        self.word_embed = self.model.add_lookup_parameters(
-            (word_count, word_dims),
-        )
-        self.tag_embed = self.model.add_lookup_parameters(
-            (tag_count, tag_dims),
-        )
-
-        self.fwd_lstm1 = LSTM(word_dims + tag_dims, lstm_units, self.model)
-        self.back_lstm1 = LSTM(word_dims + tag_dims, lstm_units, self.model)
-
-        self.fwd_lstm2 = LSTM(2 * lstm_units, lstm_units, self.model)
-        self.back_lstm2 = LSTM(2 * lstm_units, lstm_units, self.model)
+        self.lstm = nn.LSTM(word_dims + tag_dims, 
+                            lstm_units,
+                            num_layers=2,
+                            bidirectional=True).cuda(GPU)
 
 
-        self.struct_hidden_W = self.model.add_parameters(
-            (hidden_units, 4 * struct_spans * lstm_units),
-            dynet.UniformInitializer(0.01),
-        )
-        self.struct_hidden_b = self.model.add_parameters(
-            (hidden_units,),
-            dynet.ConstInitializer(0),
-        )
-        self.struct_output_W = self.model.add_parameters(
-            (struct_out, hidden_units),
-            dynet.ConstInitializer(0),
-        )
-        self.struct_output_b = self.model.add_parameters(
-            (struct_out,),
-            dynet.ConstInitializer(0),
-        )
+        self.struct = SubNetwork(word_count, tag_count, 
+                                 word_dims, tag_dims, 
+                                 lstm_units, hidden_units, struct_out, droprate, struct_spans)
+        self.label = SubNetwork(word_count, tag_count,
+                                word_dims, tag_dims,
+                                lstm_units, hidden_units, label_out, droprate, label_spans)
+        self.hidden = self.init_hidden()
 
-        self.label_hidden_W = self.model.add_parameters(
-            (hidden_units, 4 * label_spans * lstm_units),
-            dynet.UniformInitializer(0.01),
-        )
-        self.label_hidden_b = self.model.add_parameters(
-            (hidden_units,),
-            dynet.ConstInitializer(0),
-        )
-        self.label_output_W = self.model.add_parameters(
-            (label_out, hidden_units),
-            dynet.ConstInitializer(0),
-        )
-        self.label_output_b = self.model.add_parameters(
-            (label_out,),
-            dynet.ConstInitializer(0),
-        )
+    def init_hidden(self):
+        self.struct.hidden = self.struct.init_hidden()
+        self.label.hidden = self.label.init_hidden()
 
-
-    def init_params(self):
-
-        self.word_embed.init_from_array(
-            np.random.uniform(-0.01, 0.01, self.word_embed.shape()),
-        )
-        self.tag_embed.init_from_array(
-            np.random.uniform(-0.01, 0.01, self.tag_embed.shape()),
-        )
-
-
-    def prep_params(self):
-
-        self.W1_struct = dynet.parameter(self.struct_hidden_W)
-        self.b1_struct = dynet.parameter(self.struct_hidden_b)
-
-        self.W2_struct = dynet.parameter(self.struct_output_W)
-        self.b2_struct = dynet.parameter(self.struct_output_b)        
-
-        self.W1_label = dynet.parameter(self.label_hidden_W)
-        self.b1_label = dynet.parameter(self.label_hidden_b)
-
-        self.W2_label = dynet.parameter(self.label_output_W)
-        self.b2_label = dynet.parameter(self.label_output_b)    
+        return (autograd.Variable(torch.zeros(1, 1, self.lstm_units).cuda(GPU)),
+                autograd.Variable(torch.zeros(1, 1, self.lstm_units).cuda(GPU)),
+                autograd.Variable(torch.zeros(1, 1, self.lstm_units).cuda(GPU)),
+                autograd.Variable(torch.zeros(1, 1, self.lstm_units).cuda(GPU)))
 
 
     def evaluate_recurrent(self, word_inds, tag_inds, test=False):
-
-        fwd1 = self.fwd_lstm1.initial_state()
-        back1 = self.back_lstm1.initial_state()
-
-        fwd2 = self.fwd_lstm2.initial_state()
-        back2 = self.back_lstm2.initial_state()
-
         sentence = []
 
+        wordvecs = self.word_embed(word_inds)
+        tagvecs = self.tag_embed(tag_inds)
+        wordvecs = wordvecs.view(self.word_dims, len(word_inds))
+        tagvecs = tagvecs.view(self.tag_dims, len(tag_inds))
+
+
+        #print("number of words in sentence:",len(word_inds), len(tag_inds))
+        #print(wordvecs.size())
+        #print(tagvecs.size())
+        
+        sentence = torch.cat([wordvecs, tagvecs])
+        #sentence = sentence.view(len(sentence), 1, -1)
+
+        #print(sentence.size())
+        #print(self.lstm_units)
+
+        sentence = sentence.view(-1, 1, len(sentence))
+
+
+
+        """
         for (w, t) in zip(word_inds, tag_inds):
-            wordvec = dynet.lookup(self.word_embed, w)
-            tagvec = dynet.lookup(self.tag_embed, t)
-            vec = dynet.concatenate([wordvec, tagvec])
-            sentence.append(vec)
+            wordvec = self.word_embed(w)
+            tagvec = self.tag_embed(t)
+            vec = torch.cat([wordvec, tagvec])
+            sentence.append(vec.view(1, self.word_dims + self.tag_dims))
+        sentence = torch.cat(sentence)
+        """
 
-        fwd1_out = []
-        for vec in sentence:
-            fwd1 = fwd1.add_input(vec)
-            fwd_vec = fwd1.output()
-            fwd1_out.append(fwd_vec)
+        lstm_out, self.hidden = self.lstm(sentence)
 
-        back1_out = []
-        for vec in reversed(sentence):
-            back1 = back1.add_input(vec)
-            back_vec = back1.output()
-            back1_out.append(back_vec)
+        """
+        print(lstm_out.size())
+        print(len(self.hidden), self.hidden[0].size())
+        """
+        
+        
+        """
+        fwd1 = self.hidden[0][0]
+        back1 = self.hidden[0][1]
+        fwd2 = self.hidden[0][2]
+        back2 = self.hidden[0][3]
 
-        lstm2_input = []
-        for (f, b) in zip(fwd1_out, reversed(back1_out)):
-            lstm2_input.append(dynet.concatenate([f, b]))
+        fwd1 = fwd1.view(self.lstm_units)
+        back1 = back1.view(self.lstm_units)
+        fwd2 = fwd2.view(self.lstm_units)
+        back2 = back2.view(self.lstm_units)
 
-        fwd2_out = []
-        for vec in lstm2_input:
-            if self.droprate > 0 and not test:
-                vec = dynet.dropout(vec, self.droprate)
-            fwd2 = fwd2.add_input(vec)
-            fwd_vec = fwd2.output()
-            fwd2_out.append(fwd_vec)
+        fwd = torch.cat([fwd1, fwd2])
+        back = torch.cat([back1, back2])
+        """
+        return lstm_out
 
-        back2_out = []
-        for vec in reversed(lstm2_input):
-            if self.droprate > 0 and not test:
-                vec = dynet.dropout(vec, self.droprate)
-            back2 = back2.add_input(vec)
-            back_vec = back2.output()
-            back2_out.append(back_vec)
+    
+    #def evaluate_struct(self, fwd_out, back_out, lefts, rights, test=False):
 
-        fwd_out = [dynet.concatenate([f1, f2]) for (f1, f2) in zip(fwd1_out, fwd2_out)]
-        back_out = [dynet.concatenate([b1, b2]) for (b1, b2) in zip(back1_out, back2_out)]
-
-        return fwd_out, back_out[::-1]
-
-
-    def evaluate_struct(self, fwd_out, back_out, lefts, rights, test=False):
-
-        fwd_span_out = []
-        for left_index, right_index in zip(lefts, rights):
-            fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
-        fwd_span_vec = dynet.concatenate(fwd_span_out)
-
-        back_span_out = []
-        for left_index, right_index in zip(lefts, rights):
-            back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-        back_span_vec = dynet.concatenate(back_span_out)
-
-        hidden_input = dynet.concatenate([fwd_span_vec, back_span_vec])
-
-        if self.droprate > 0 and not test:
-            hidden_input = dynet.dropout(hidden_input, self.droprate)
-
-        hidden_output = self.activation(self.W1_struct * hidden_input + self.b1_struct)
-
-        scores = (self.W2_struct * hidden_output + self.b2_struct)
-
-        return scores
-
-
-
-    def evaluate_label(self, fwd_out, back_out, lefts, rights, test=False):
-
-        fwd_span_out = []
-        for left_index, right_index in zip(lefts, rights):
-            fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
-        fwd_span_vec = dynet.concatenate(fwd_span_out)
-
-        back_span_out = []
-        for left_index, right_index in zip(lefts, rights):
-            back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-        back_span_vec = dynet.concatenate(back_span_out)
-
-        hidden_input = dynet.concatenate([fwd_span_vec, back_span_vec])
-
-        if self.droprate > 0 and not test:
-            hidden_input = dynet.dropout(hidden_input, self.droprate)
-
-        hidden_output = self.activation(self.W1_label * hidden_input + self.b1_label)
-
-        scores = (self.W2_label * hidden_output + self.b2_label)
-
-        return scores
 
 
     def save(self, filename):
         """
         Appends architecture hyperparameters to end of dynet model file.
+        """
         """
         self.model.save(filename)
 
@@ -352,12 +246,26 @@ class Network(object):
             f.write('hidden_units = {}\n'.format(self.hidden_units))
             f.write('struct_out = {}\n'.format(self.struct_out))
             f.write('label_out = {}\n'.format(self.label_out))
-
+        """
+        torch.save({
+            "state_dict": self.state_dict(),
+            "struct_state_dict": self.struct.state_dict(),
+            "label_state_dict": self.label.state_dict(),
+            "word_count": self.word_count,
+            "tag_count": self.tag_count,
+            "word_dims": self.word_dims,
+            "tag_dims": self.tag_dims,
+            "lstm_units": self.lstm_units,
+            "hidden_units": self.hidden_units,
+            "struct_out": self.struct_out,
+            "label_out": self.label_out,
+        }, filename)
 
     @staticmethod
     def load(filename):
         """
         Loads file created by save() method.
+        """
         """
         with open(filename) as f:
             f.readline()
@@ -370,7 +278,18 @@ class Network(object):
             hidden_units = int(f.readline().split()[-1])
             struct_out = int(f.readline().split()[-1])
             label_out = int(f.readline().split()[-1])
+        """
+        checkpoint = torch.load(filename)
 
+        word_count = checkpoint["word_count"]
+        tag_count = checkpoint["tag_count"]
+        word_dims = checkpoint["word_dims"]
+        tag_dims = checkpoint["tag_dims"]
+        lstm_units = checkpoint["lstm_units"]
+        hidden_units = checkpoint["hidden_units"]
+        struct_out = checkpoint["struct_out"]
+        label_out = checkpoint["label_out"]
+        
         network = Network(
             word_count=word_count,
             tag_count=tag_count,
@@ -381,10 +300,10 @@ class Network(object):
             struct_out=struct_out,
             label_out=label_out,
         )
-        network.model.load(filename)
-
+        network.load_state_dict(checkpoint["state_dict"])
+        network.struct.load_state_dict(checkpoint["struct_state_dict"])
+        network.label.load_state_dict(checkpoint["label_state_dict"])
         return network
-
 
     @staticmethod
     def train(
@@ -421,7 +340,11 @@ class Network(object):
             label_out=fm.total_label_actions(),
             droprate=droprate,
         )
-        network.init_params()
+
+        struct_loss_function = nn.NLLLoss().cuda(GPU)
+        label_loss_function = nn.NLLLoss().cuda(GPU)
+        trainer = optim.Adam(network.parameters(), lr = 0.0001)
+
 
         print('Hidden units: {},  per-LSTM units: {}'.format(
             hidden_units,
@@ -461,6 +384,9 @@ class Network(object):
 
             for b in xrange(num_batches):
                 batch = training_data[(b * batch_size) : ((b + 1) * batch_size)]
+                #network.zero_grad()
+                #network.hidden = network.init_hidden()
+
 
                 explore = [
                     Parser.exploration(
@@ -476,12 +402,15 @@ class Network(object):
 
                 batch = [example for (example, _) in explore]
 
-                dynet.renew_cg()
-                network.prep_params()
+                #dynet.renew_cg()
+                #network.prep_params()
 
                 errors = []
+                total_loss = autograd.Variable(torch.FloatTensor([0])).cuda(GPU)
 
                 for example in batch:
+                    network.zero_grad()
+                    network.hidden = network.init_hidden()
 
                     ## random UNKing ##
                     for (i, w) in enumerate(example['w']):
@@ -494,31 +423,58 @@ class Network(object):
                         if r < drop_prob:
                             example['w'][i] = 0
 
-                    fwd, back = network.evaluate_recurrent(
+                    embeddings = network.evaluate_recurrent(
                         example['w'],
                         example['t'],
                     )
 
+
+                    struct_scores, struct_corrects = [], []
                     for (left, right), correct in example['struct_data'].items():
-                        scores = network.evaluate_struct(fwd, back, left, right)
+                        struct_scoring = network.struct.forward(embeddings, left, right)
+                        struct_scores.append(struct_scoring)
+                        struct_corrects.append(correct)
 
-                        probs = dynet.softmax(scores)
-                        loss = -dynet.log(dynet.pick(probs, correct))
-                        errors.append(loss)
-                    total_states += len(example['struct_data'])
+                    struct_scores = torch.cat(struct_scores)
+                    struct_corrects = autograd.Variable(torch.LongTensor(struct_corrects)).cuda(GPU)
+                    loss = struct_loss_function(struct_scores, struct_corrects)
+                    total_loss += loss
 
+                    loss.backward(retain_variables=True)
+                    trainer.step()
+
+                    label_scores, label_corrects = [],[]
                     for (left, right), correct in example['label_data'].items():
-                        scores = network.evaluate_label(fwd, back, left, right)
+                        label_scoring = network.label.forward(embeddings, left, right)
+                        label_scores.append(label_scoring)
+                        label_corrects.append(correct)
 
-                        probs = dynet.softmax(scores)
-                        loss = -dynet.log(dynet.pick(probs, correct))
-                        errors.append(loss)
+                    label_scores = torch.cat(label_scores)
+                    label_corrects = autograd.Variable(torch.LongTensor(label_corrects)).cuda(GPU)
+                    loss = label_loss_function(label_scores, label_corrects)
+                    total_loss += loss
+
+                    loss.backward()
+                    trainer.step()
+
+                    """
+                    print(struct_scores.size())
+                    print(label_scores.size())
+                    scores = torch.cat([struct_scores, label_scores])
+                    corrects = torch.cat([struct_corrects, label_corrects])
+                    loss = loss_function(scores, corrects)
+                    total_loss += loss
+                    """
+
+                    total_states += len(example['struct_data'])
                     total_states += len(example['label_data'])
 
-                batch_error = dynet.esum(errors)
-                total_cost += batch_error.scalar_value()
-                batch_error.backward()
-                network.trainer.update()
+
+                #batch_error = dynet.esum(errors)
+                #total_cost += batch_error.scalar_value()
+                #batch_error.backward()
+                #trainer.update()
+
 
                 mean_cost = total_cost / total_states
 
@@ -548,4 +504,5 @@ class Network(object):
             current_time = time.time()
             runmins = (current_time - start_time)/60.
             print('  Elapsed time: {:.2f}m'.format(runmins))
+
 

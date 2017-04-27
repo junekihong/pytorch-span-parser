@@ -6,8 +6,14 @@ from __future__ import print_function
 from __future__ import division
 
 import numpy as np
-import dynet
 from collections import defaultdict
+
+#import dynet
+import torch
+import torch.autograd as autograd
+
+from constants import GPU
+
 
 from phrase_tree import PhraseTree, FScore
 
@@ -262,8 +268,8 @@ class Parser(object):
             Follow softmax distribution for structural data.
         """
 
-        dynet.renew_cg()
-        network.prep_params()
+        #dynet.renew_cg()
+        #network.prep_params()
 
         struct_data = {}
         label_data = {}
@@ -276,7 +282,10 @@ class Parser(object):
 
         w = data['w']
         t = data['t']
-        fwd, back = network.evaluate_recurrent(w, t, test=True)
+        w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(GPU))
+        t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(GPU))
+
+        embeddings = network.evaluate_recurrent(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -296,13 +305,12 @@ class Parser(object):
                     action = correct_action
                 else:
                     left, right = features
-                    scores = network.evaluate_struct(
-                        fwd,
-                        back,
+                    scores = network.struct.forward(
+                        embeddings,
                         left,
                         right,
                         test=True,
-                    ).npvalue()
+                    ).cpu().data.numpy()[0]
 
                     # sample from distribution
                     exp = np.exp(scores * alpha)
@@ -326,13 +334,12 @@ class Parser(object):
                 action = correct_action
             else:
                 left, right = features
-                scores = network.evaluate_label(
-                    fwd,
-                    back,
+                scores = network.label.forward(
+                    embeddings,
                     left,
                     right,
                     test=True,
-                ).npvalue()
+                ).cpu().data.numpy()[0]
                 if step < (2 * n - 2):
                     action_index = np.argmax(scores)
                 else:
@@ -357,15 +364,17 @@ class Parser(object):
     @staticmethod
     def parse(sentence, fm, network):
 
-        dynet.renew_cg()
-        network.prep_params()
+        #dynet.renew_cg()
+        #network.prep_params()
 
         n = len(sentence)
         state = Parser(n)
 
         w, t = fm.sentence_sequences(sentence)
+        w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(GPU))
+        t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(GPU))
 
-        fwd, back = network.evaluate_recurrent(w, t, test=True)
+        embeddings = network.evaluate_recurrent(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -375,26 +384,24 @@ class Parser(object):
                 action = 'comb'
             else:
                 left, right = state.s_features()
-                scores = network.evaluate_struct(
-                    fwd,
-                    back,
+                scores = network.struct.forward(
+                    embeddings,
                     left,
                     right,
                     test=True,
-                ).npvalue()
+                ).cpu().data.numpy()[0]
                 action_index = np.argmax(scores)
                 action = fm.s_action(action_index)
             state.take_action(action)
 
 
             left, right = state.l_features()
-            scores = network.evaluate_label(
-                fwd,
-                back,
+            scores = network.label.forward(
+                embeddings,
                 left,
                 right,
                 test=True,
-            ).npvalue()
+            ).cpu().data.numpy()[0]
             if step < (2 * n - 2):
                 action_index = np.argmax(scores)
             else:
