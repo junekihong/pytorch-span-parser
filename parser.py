@@ -285,7 +285,8 @@ class Parser(object):
         w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(GPU))
         t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(GPU))
 
-        embeddings = network.evaluate_recurrent(w, t, test=True)
+        network.struct.evaluate_recurrent(w, t, test=True)
+        network.label.evaluate_recurrent(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -306,7 +307,6 @@ class Parser(object):
                 else:
                     left, right = features
                     scores = network.struct.forward(
-                        embeddings,
                         left,
                         right,
                         test=True,
@@ -335,7 +335,6 @@ class Parser(object):
             else:
                 left, right = features
                 scores = network.label.forward(
-                    embeddings,
                     left,
                     right,
                     test=True,
@@ -374,7 +373,8 @@ class Parser(object):
         w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(GPU))
         t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(GPU))
 
-        embeddings = network.evaluate_recurrent(w, t, test=True)
+        network.struct.evaluate_recurrent(w, t, test=True)
+        network.label.evaluate_recurrent(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -385,7 +385,6 @@ class Parser(object):
             else:
                 left, right = state.s_features()
                 scores = network.struct.forward(
-                    embeddings,
                     left,
                     right,
                     test=True,
@@ -397,7 +396,6 @@ class Parser(object):
 
             left, right = state.l_features()
             scores = network.label.forward(
-                embeddings,
                 left,
                 right,
                 test=True,
