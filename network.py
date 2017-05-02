@@ -59,8 +59,6 @@ class SubNetwork(nn.Module):
                             lstm_units,
                             num_layers=2,
                             bidirectional=True).cuda(GPU)
-        
-
 
         self.span2hidden = nn.Linear(2 * spans * lstm_units, hidden_units).cuda(GPU)
         self.hidden2out = nn.Linear(hidden_units, out_dim).cuda(GPU)
@@ -327,7 +325,6 @@ class Network:
                     network.label.hidden_lstm = network.label.init_hidden_lstm()
                     network.label.hidden_linear = network.label.init_hidden_linear()
 
-
                     ## random UNKing ##
                     for (i, w) in enumerate(example['w']):
                         if w <= 2:
@@ -350,35 +347,36 @@ class Network:
 
                     struct_scores, struct_corrects = [], []
                     for (left, right), correct in example['struct_data'].items():
-                        struct_scoring = network.struct.forward(left, right)
+                        struct_scoring = network.struct(left, right)
                         struct_scores.append(struct_scoring)
                         struct_corrects.append(correct)
+                        #struct_corrects.append([1 if i == correct else 0 for i in xrange(struct_scoring.size()[1])])
 
                     struct_scores = torch.cat(struct_scores)
                     struct_corrects = autograd.Variable(torch.LongTensor(struct_corrects)).cuda(GPU)
+
+                    #print(struct_corrects)
+
                     loss = struct_loss_function(struct_scores, struct_corrects)
                     total_loss += loss
-
                     loss.backward()
-                    struct_trainer.step()
 
 
                     # Temporary: Not train the labeler. Just the struct predicter.
-                    """
+
                     label_scores, label_corrects = [],[]
                     for (left, right), correct in example['label_data'].items():
-                        label_scoring = network.label.forward(left, right)
+                        label_scoring = network.label(left, right)
                         label_scores.append(label_scoring)
                         label_corrects.append(correct)
+                        #label_corrects.append([1 if i == correct else 0 for i in xrange(label_scoring.size()[1])])
 
                     label_scores = torch.cat(label_scores)
                     label_corrects = autograd.Variable(torch.LongTensor(label_corrects)).cuda(GPU)
                     loss = label_loss_function(label_scores, label_corrects)
                     total_loss += loss
-
                     loss.backward()
-                    label_trainer.step()
-                    """
+
                     
 
                     """

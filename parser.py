@@ -306,11 +306,12 @@ class Parser(object):
                     action = correct_action
                 else:
                     left, right = features
-                    scores = network.struct.forward(
+                    scores = network.struct(
                         left,
                         right,
                         test=True,
-                    ).cpu().data.numpy()[0]
+                    )#.cpu().data.numpy()[0]
+                    scores = scores.cpu().data.numpy()[0]
 
                     # sample from distribution
                     exp = np.exp(scores * alpha)
@@ -334,11 +335,13 @@ class Parser(object):
                 action = correct_action
             else:
                 left, right = features
-                scores = network.label.forward(
+                scores = network.label(
                     left,
                     right,
                     test=True,
-                ).cpu().data.numpy()[0]
+                )#.cpu().data.numpy()[0]
+                scores = scores.cpu().data.numpy()[0]
+
                 if step < (2 * n - 2):
                     action_index = np.argmax(scores)
                 else:
@@ -384,22 +387,26 @@ class Parser(object):
                 action = 'comb'
             else:
                 left, right = state.s_features()
-                scores = network.struct.forward(
+                scores = network.struct(
                     left,
                     right,
                     test=True,
-                ).cpu().data.numpy()[0]
+                )#.cpu().data.numpy()[0]
+                scores = scores.cpu().data.numpy()[0]
+
                 action_index = np.argmax(scores)
                 action = fm.s_action(action_index)
             state.take_action(action)
 
 
             left, right = state.l_features()
-            scores = network.label.forward(
+            scores = network.label(
                 left,
                 right,
                 test=True,
-            ).cpu().data.numpy()[0]
+            )#.cpu().data.numpy()[0]
+            scores = scores.cpu().data.numpy()[0]
+
             if step < (2 * n - 2):
                 action_index = np.argmax(scores)
             else:
