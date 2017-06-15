@@ -137,6 +137,14 @@ if __name__ == '__main__':
         default=0,
         help='Probability of using oracle action in exploration. (DEFAULT=0)',
     )
+    parser.add_argument(
+        '--gpu',
+        dest='gpu',
+        type=int,
+        default=None,
+        help="Set which GPU core to use, (DEFAULT=CPU)",
+    )
+
     parser.add_argument('--np-seed', type=int, dest='np_seed')
 
     args = parser.parse_args()
@@ -176,7 +184,7 @@ if __name__ == '__main__':
 
         test_trees = PhraseTree.load_treefile(args.test)
         print('Loaded test trees from {}'.format(args.test))
-        network = Network.load(args.model)
+        network = Network.load(args.model, args.GPU)
         print('Loaded model from: {}'.format(args.model))
         accuracy = Parser.evaluate_corpus(test_trees, fm, network)
         print('Accuracy: {}'.format(accuracy))
@@ -204,6 +212,7 @@ if __name__ == '__main__':
             unk_param=args.unk_param,
             alpha=args.alpha,
             beta=args.beta,
+            GPU=args.gpu,
         )
 
 

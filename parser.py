@@ -12,9 +12,6 @@ from collections import defaultdict
 import torch
 import torch.autograd as autograd
 
-from constants import GPU
-
-
 from phrase_tree import PhraseTree, FScore
 
 
@@ -282,8 +279,14 @@ class Parser(object):
 
         w = data['w']
         t = data['t']
-        w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(GPU))
-        t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(GPU))
+
+        if network.GPU is not None:
+            w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(network.GPU))
+            t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(network.GPU))
+        else:
+            w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
+            t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
+
 
         network.struct.evaluate_recurrent(w, t, test=True)
         network.label.evaluate_recurrent(w, t, test=True)
@@ -373,8 +376,13 @@ class Parser(object):
         state = Parser(n)
 
         w, t = fm.sentence_sequences(sentence)
-        w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(GPU))
-        t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(GPU))
+
+        if network.GPU is not None:
+            w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(network.GPU))
+            t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(network.GPU))
+        else:
+            w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
+            t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
 
         network.struct.evaluate_recurrent(w, t, test=True)
         network.label.evaluate_recurrent(w, t, test=True)
