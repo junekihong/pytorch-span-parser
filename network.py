@@ -321,7 +321,12 @@ class Network:
 
                 batch = [example for (example, _) in explore]
                 errors = []
+                
+                struct_loss = 0.0
+                label_loss = 0.0
 
+
+                errors = []
                 for example in batch:
                     network.struct.zero_grad()
                     network.label.zero_grad()
@@ -362,7 +367,10 @@ class Network:
                     logsoftmax = nn.LogSoftmax()
                     softmax = logsoftmax(struct_scores)
                     loss = struct_loss_function(softmax, struct_corrects)
+                    struct_loss += loss
                     total_cost += loss.data[0]
+                    
+                    errors.append(loss.data[0])
                     loss.backward()
 
 
@@ -379,7 +387,10 @@ class Network:
                         label_corrects = autograd.Variable(torch.LongTensor(label_corrects))
                     softmax = logsoftmax(label_scores)
                     loss = label_loss_function(softmax, label_corrects)
+                    label_loss += loss
                     total_cost += loss.data[0]
+                    
+                    errors.append(loss.data[0])
                     loss.backward()
 
                     total_states += len(example['struct_data'])
@@ -391,6 +402,12 @@ class Network:
                 #batch_error.backward()
                 #trainer.update()
 
+                #struct_loss.backward()
+                #label_loss.backward()
+                
+                #print(["{.2f}".format(x) for x in errors])
+                #print(len(errors))
+                #print(sum(errors))
 
                 mean_cost = (total_cost / total_states)
 
