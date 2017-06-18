@@ -15,6 +15,11 @@ import torch.autograd as autograd
 from phrase_tree import PhraseTree, FScore
 
 
+def renormalize(scores):
+    exp = np.exp(scores * 1)
+    softmax = exp / (exp.sum())
+    return np.log(softmax)
+
 class Parser(object):
   
     def __init__(self, n):
@@ -288,8 +293,7 @@ class Parser(object):
             t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
 
 
-        network.struct.evaluate_recurrent(w, t, test=True)
-        network.label.evaluate_recurrent(w, t, test=True)
+        embeddings, hidden = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -309,11 +313,12 @@ class Parser(object):
                     action = correct_action
                 else:
                     left, right = features
-                    scores,hidden = network.struct(
+                    scores = network.struct(
+                        embeddings,
                         left,
                         right,
                         test=True,
-                    )#.cpu().data.numpy()[0]
+                    )
                     scores = scores.cpu().data.numpy()[0]
 
                     # sample from distribution
@@ -338,11 +343,12 @@ class Parser(object):
                 action = correct_action
             else:
                 left, right = features
-                scores,hidden = network.label(
+                scores = network.label(
+                    embeddings,
                     left,
                     right,
                     test=True,
-                )#.cpu().data.numpy()[0]
+                )
                 scores = scores.cpu().data.numpy()[0]
 
                 if step < (2 * n - 2):
@@ -384,8 +390,7 @@ class Parser(object):
             w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
             t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
 
-        network.struct.evaluate_recurrent(w, t, test=True)
-        network.label.evaluate_recurrent(w, t, test=True)
+        embeddings, hidden = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -395,12 +400,14 @@ class Parser(object):
                 action = 'comb'
             else:
                 left, right = state.s_features()
-                scores,hidden = network.struct(
+                scores = network.struct(
+                    embeddings,
                     left,
                     right,
                     test=True,
-                )#.cpu().data.numpy()[0]
+                )
                 scores = scores.cpu().data.numpy()[0]
+                #scores = renormalize(scores)
 
                 action_index = np.argmax(scores)
                 action = fm.s_action(action_index)
@@ -408,7 +415,8 @@ class Parser(object):
 
 
             left, right = state.l_features()
-            scores,hidden = network.label(
+            scores = network.label(
+                embeddings,
                 left,
                 right,
                 test=True,

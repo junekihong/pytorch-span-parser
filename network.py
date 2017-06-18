@@ -25,13 +25,83 @@ torch.manual_seed(1)
 
 from pprint import pprint
 
+def renormalize(scores):
+    exp = np.exp(scores * 1)
+    softmax = exp / (exp.sum())
+    return -np.log(softmax)
 
-class SubNetwork(nn.Module):
-    
+def repackage_hidden(h):
+    """Wraps hidden states in new Variables, to detach them from their history."""
+    if type(h) == autograd.Variable:
+        return autograd.Variable(h.data)
+    else:
+        return tuple(repackage_hidden(v) for v in h)
+
+
+class LSTM(nn.Module):
     def __init__(
             self,
             word_count, tag_count,
             word_dims, tag_dims,
+            lstm_units,
+            droprate,
+            GPU=None,
+    ):
+        super(LSTM, self).__init__()
+        self.word_dims, self.tag_dims = word_dims, tag_dims
+
+        self.lstm_units = lstm_units
+        self.droprate = droprate
+        self.GPU = GPU
+        if GPU is not None:
+            self.word_embed = nn.Embedding(word_count, word_dims).cuda(GPU)
+            self.tag_embed = nn.Embedding(tag_count, tag_dims).cuda(GPU)
+            self.lstm = nn.LSTM(word_dims + tag_dims,
+                                lstm_units,
+                                num_layers=2,
+                                dropout=droprate,
+                                bidirectional=True).cuda(GPU)
+        else:
+            self.word_embed = nn.Embedding(word_count, word_dims)
+            self.tag_embed = nn.Embedding(tag_count, tag_dims)
+            self.lstm = nn.LSTM(word_dims + tag_dims,
+                                lstm_units,
+                                num_layers=2,
+                                bidirectional=True)
+        self.init_weights()
+
+    def init_weights(self):
+        initrange = 0.1
+        self.word_embed.weight.data.uniform_(-initrange, initrange)
+        self.tag_embed.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, word_inds, tag_inds, test=False):
+        wordvecs = self.word_embed(word_inds)
+        tagvecs = self.tag_embed(tag_inds)
+        wordvecs = wordvecs.view(self.word_dims, len(word_inds))
+        tagvecs = tagvecs.view(self.tag_dims, len(tag_inds))
+
+        sentence = torch.cat([wordvecs, tagvecs])
+        sentence = sentence.view(1, sentence.size()[1], sentence.size()[0])
+        lstm_out, self.hidden_lstm = self.lstm(sentence)
+        self.embeddings = lstm_out.view(lstm_out.size()[1], lstm_out.size()[2])
+        return self.embeddings, self.hidden_lstm
+        
+    def init_hidden(self, batch_size):
+        weight = next(self.parameters()).data
+        num_layers = 2
+        if self.GPU is not None:
+            return (autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_().cuda(self.GPU)),
+                    autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()).cuda(self.GPU))
+        return (autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
+                autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+
+
+
+class Action_Network(nn.Module):
+    
+    def __init__(
+            self,
             lstm_units,
             hidden_units,
             out_dim,
@@ -39,10 +109,7 @@ class SubNetwork(nn.Module):
             spans,
             GPU=None,
     ):
-        super(SubNetwork, self).__init__()
-
-        self.word_count, self.tag_count = word_count, tag_count
-        self.word_dims, self.tag_dims = word_dims, tag_dims
+        super(Action_Network, self).__init__()
 
         self.lstm_units = lstm_units
         self.hidden_units = hidden_units
@@ -54,88 +121,36 @@ class SubNetwork(nn.Module):
         self.GPU = GPU
 
         if GPU is not None:
-            self.word_embed = nn.Embedding(word_count, word_dims).cuda(GPU)
-            self.tag_embed = nn.Embedding(tag_count, tag_dims).cuda(GPU)
-            """
-            self.lstm = nn.LSTM(word_dims + tag_dims,
-                                lstm_units,
-                                num_layers=2,
-                                dropout=droprate,
-                                bidirectional=True).cuda(GPU)
-            """
             self.span2hidden = nn.Linear(2 * spans * lstm_units, hidden_units).cuda(GPU)
             self.hidden2out = nn.Linear(hidden_units, out_dim).cuda(GPU)
         else:
-            self.word_embed = nn.Embedding(word_count, word_dims)
-            self.tag_embed = nn.Embedding(tag_count, tag_dims)
-            """
-            self.lstm = nn.LSTM(word_dims + tag_dims,
-                                lstm_units,
-                                num_layers=2,
-                                bidirectional=True)
-            """
             self.span2hidden = nn.Linear(2 * spans * lstm_units, hidden_units)
             self.hidden2out = nn.Linear(hidden_units, out_dim)
-
         self.init_weights()
 
     def init_weights(self):
         initrange = 0.1
-        #self.encoder.weight.data.uniform_(-initrange, initrange)
-        self.word_embed.weight.data.uniform_(-initrange, initrange)
-        self.tag_embed.weight.data.uniform_(-initrange, initrange)
         self.span2hidden.bias.data.fill_(0)
         self.span2hidden.weight.data.uniform_(-initrange, initrange)
         self.hidden2out.bias.data.fill_(0)
         self.hidden2out.weight.data.uniform_(-initrange, initrange)
 
-    def init_hidden(self, batch_size):
-        weight = next(self.parameters()).data
-        num_layers = 2
-        if self.GPU is not None:
-            return (autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_().cuda(self.GPU)),
-                    autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()).cuda(self.GPU))
-        return (autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
-                autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
-
-    def evaluate_recurrent(self, word_inds, tag_inds, test=False):
-        sentence = []
-
-        wordvecs = self.word_embed(word_inds)
-        tagvecs = self.tag_embed(tag_inds)
-        wordvecs = wordvecs.view(self.word_dims, len(word_inds))
-        tagvecs = tagvecs.view(self.tag_dims, len(tag_inds))
-
-        sentence = torch.cat([wordvecs, tagvecs])
-        sentence = sentence.view(1, sentence.size()[1], sentence.size()[0])
-        lstm_out, self.hidden_lstm = self.lstm(sentence)
-
-        #print(lstm_out)
-        #print(lstm_out.size())
-        #exit()
-
-        self.embeddings = lstm_out.view(lstm_out.size()[1], lstm_out.size()[2])
-        return lstm_out
-
-
-    def forward(self, lefts, rights, test=False):
+    def forward(self, embeddings, lefts, rights, test=False):
         span_out = []
         for left_index, right_index in zip(lefts, rights):
-            embedding = self.embeddings[right_index] - self.embeddings[left_index - 1]
+            embedding = embeddings[right_index] - embeddings[left_index - 1]
             span_out.append(embedding)
         hidden_input = torch.cat(span_out)
 
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
-
-        hidden_output = self.span2hidden(hidden_input.view(1, hidden_input.size(0)))
+        hidden_output = nn.functional.relu(self.span2hidden(hidden_input.view(1, hidden_input.size(0))))
         scores = self.hidden2out(hidden_output)
-        return scores, self.hidden_lstm
+        return scores
 
 
 
 
-#class Network(nn.Module):
 class Network:
 
     def __init__(
@@ -162,30 +177,13 @@ class Network:
         self.droprate = droprate
         self.GPU = GPU
 
-        self.struct = SubNetwork(word_count, tag_count, 
-                                 word_dims, tag_dims, 
-                                 lstm_units, hidden_units, struct_out, droprate, struct_spans,
-                                 GPU)
-        self.label = SubNetwork(word_count, tag_count,
-                                word_dims, tag_dims,
-                                lstm_units, hidden_units, label_out, droprate, label_spans,
-                                GPU)
-
-        if GPU is not None:
-            lstm = nn.LSTM(word_dims + tag_dims,
-                           lstm_units,
-                           num_layers=2,
-                           dropout=droprate,
-                           bidirectional=True).cuda(GPU)
-        else:
-            lstm = nn.LSTM(word_dims + tag_dims,
-                           lstm_units,
-                           num_layers=2,
-                           dropout=droprate,
-                           bidirectional=True)
-        self.struct.lstm = lstm
-        self.label.lstm = lstm
-
+        self.struct = Action_Network(lstm_units, hidden_units, 
+                                     struct_out, droprate, struct_spans, GPU)
+        self.label = Action_Network(lstm_units, hidden_units, 
+                                    label_out, droprate, label_spans, GPU)
+        self.lstm = LSTM(word_count, tag_count,
+                         word_dims, tag_dims,
+                         lstm_units, droprate, GPU)
 
     def save(self, filename):
         """
@@ -194,6 +192,7 @@ class Network:
         torch.save({
             "struct_state_dict": self.struct.state_dict(),
             "label_state_dict": self.label.state_dict(),
+            "lstm_state_dict": self.lstm.state_dict(),
             "word_count": self.word_count,
             "tag_count": self.tag_count,
             "word_dims": self.word_dims,
@@ -232,6 +231,7 @@ class Network:
         )
         network.struct.load_state_dict(checkpoint["struct_state_dict"])
         network.label.load_state_dict(checkpoint["label_state_dict"])
+        network.lstm.load_state_dict(checkpoint["lstm_state_dict"])
         return network
 
     @staticmethod
@@ -311,6 +311,7 @@ class Network:
         print('Loaded {} validation trees!'.format(len(dev_trees)))
 
         best_acc = FScore()
+        hidden = network.lstm.init_hidden(batch_size)
 
         for epoch in xrange(1, epochs + 1):
             print('........... epoch {} ...........'.format(epoch))
@@ -323,8 +324,11 @@ class Network:
 
             for b in xrange(num_batches):
                 batch = training_data[(b * batch_size) : ((b + 1) * batch_size)]
-                network.struct.hidden = network.struct.init_hidden(batch_size)
-                network.label.hidden = network.label.init_hidden(batch_size)
+                
+                hidden = repackage_hidden(hidden)
+                network.struct.zero_grad()
+                network.label.zero_grad()
+                network.lstm.zero_grad()
 
                 explore = [
                     Parser.exploration(
@@ -340,17 +344,7 @@ class Network:
 
                 batch = [example for (example, _) in explore]
                 errors = []
-                
-                struct_loss = 0.0
-                label_loss = 0.0
-
-
-                errors = []
                 for example in batch:
-                    network.struct.zero_grad()
-                    network.label.zero_grad()
-                    network.struct.hidden = network.struct.init_hidden(batch_size)
-                    network.label.hidden = network.label.init_hidden(batch_size)
 
                     ## random UNKing ##
                     for (i, w) in enumerate(example['w']):
@@ -362,11 +356,7 @@ class Network:
                         if r < drop_prob:
                             example['w'][i] = 0
 
-                    network.struct.evaluate_recurrent(
-                        example['w'],
-                        example['t'],
-                    )
-                    network.label.evaluate_recurrent(
+                    embeddings, hidden = network.lstm(
                         example['w'],
                         example['t'],
                     )
@@ -376,7 +366,7 @@ class Network:
                             correct = autograd.Variable(torch.LongTensor([correct])).cuda(GPU)
                         else:
                             correct = autograd.Variable(torch.LongTensor([correct]))
-                        scores,hidden = network.struct(left, right)
+                        scores = network.struct(embeddings, left, right)
                         probs = logsoftmax(scores)
                         loss = f_loss(probs, correct)
                         errors.append(loss)
@@ -387,7 +377,7 @@ class Network:
                             correct = autograd.Variable(torch.LongTensor([correct])).cuda(GPU)
                         else:
                             correct = autograd.Variable(torch.LongTensor([correct]))
-                        scores,hidden = network.label(left, right)
+                        scores = network.label(embeddings, left, right)
                         probs = logsoftmax(scores)
                         loss = f_loss(probs, correct)
                         errors.append(loss)
@@ -400,23 +390,9 @@ class Network:
                 #batch_error.backward()
                 #trainer.update()
 
-                #struct_loss.backward()
-                #label_loss.backward()
-
-                #print(errors)
-
-
                 batch_error = torch.sum(torch.cat(errors))
                 total_cost += batch_error.data[0]
                 batch_error.backward()
-
-                """
-                print(["{:.2f}".format(x.data[0]) for x in errors])
-                print(len(errors))
-                print(sum(errors))
-                print(total_states)
-                """
-
                 mean_cost = (total_cost / total_states)
 
                 print(
