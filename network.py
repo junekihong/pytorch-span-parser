@@ -56,20 +56,24 @@ class SubNetwork(nn.Module):
         if GPU is not None:
             self.word_embed = nn.Embedding(word_count, word_dims).cuda(GPU)
             self.tag_embed = nn.Embedding(tag_count, tag_dims).cuda(GPU)
+            """
             self.lstm = nn.LSTM(word_dims + tag_dims,
                                 lstm_units,
                                 num_layers=2,
                                 dropout=droprate,
                                 bidirectional=True).cuda(GPU)
+            """
             self.span2hidden = nn.Linear(2 * spans * lstm_units, hidden_units).cuda(GPU)
             self.hidden2out = nn.Linear(hidden_units, out_dim).cuda(GPU)
         else:
             self.word_embed = nn.Embedding(word_count, word_dims)
             self.tag_embed = nn.Embedding(tag_count, tag_dims)
+            """
             self.lstm = nn.LSTM(word_dims + tag_dims,
                                 lstm_units,
                                 num_layers=2,
                                 bidirectional=True)
+            """
             self.span2hidden = nn.Linear(2 * spans * lstm_units, hidden_units)
             self.hidden2out = nn.Linear(hidden_units, out_dim)
 
@@ -120,14 +124,13 @@ class SubNetwork(nn.Module):
             embedding = self.embeddings[right_index] - self.embeddings[left_index - 1]
             span_out.append(embedding)
         hidden_input = torch.cat(span_out)
-        hidden_input = hidden_input.view(1, (len(hidden_input)))
-        
+
         if self.droprate > 0 and not test:
-            pass
-            #hidden_input = dynet.dropout(hidden_input, self.droprate)
-        hidden_output = self.span2hidden(hidden_input)
+            hidden_input = self.drop(hidden_input)
+
+        hidden_output = self.span2hidden(hidden_input.view(1, hidden_input.size(0)))
         scores = self.hidden2out(hidden_output)
-        return scores
+        return scores, self.hidden_lstm
 
 
 
@@ -168,6 +171,20 @@ class Network:
                                 lstm_units, hidden_units, label_out, droprate, label_spans,
                                 GPU)
 
+        if GPU is not None:
+            lstm = nn.LSTM(word_dims + tag_dims,
+                           lstm_units,
+                           num_layers=2,
+                           dropout=droprate,
+                           bidirectional=True).cuda(GPU)
+        else:
+            lstm = nn.LSTM(word_dims + tag_dims,
+                           lstm_units,
+                           num_layers=2,
+                           dropout=droprate,
+                           bidirectional=True)
+        self.struct.lstm = lstm
+        self.label.lstm = lstm
 
 
     def save(self, filename):
@@ -256,11 +273,13 @@ class Network:
         )
 
         if GPU is not None:
-            struct_loss_function = nn.NLLLoss().cuda(GPU)
-            label_loss_function = nn.NLLLoss().cuda(GPU)
+            f_loss = nn.NLLLoss().cuda(GPU)
+            logsoftmax = nn.LogSoftmax().cuda(GPU)
+            #f_loss = nn.CrossEntropyLoss().cuda(GPU)
         else:
-            struct_loss_function = nn.NLLLoss()
-            label_loss_function = nn.NLLLoss()
+            f_loss = nn.NLLLoss()
+            logsoftmax = nn.LogSoftmax()
+            #f_loss = nn.CrossEntropyLoss()
 
         struct_trainer = optim.Adam(network.struct.parameters(), lr = 0.0001)
         label_trainer = optim.Adam(network.label.parameters(), lr = 0.0001)
@@ -337,7 +356,6 @@ class Network:
                     for (i, w) in enumerate(example['w']):
                         if w <= 2:
                             continue
-
                         freq = fm.word_freq_list[w]
                         drop_prob = unk_param / (unk_param + freq)
                         r = np.random.random()
@@ -353,48 +371,28 @@ class Network:
                         example['t'],
                     )
 
-                    struct_scores, struct_corrects = [], []
                     for (left, right), correct in example['struct_data'].items():
-                        struct_scoring = network.struct(left, right)
-                        struct_scores.append(struct_scoring)
-                        struct_corrects.append(correct)
-                    struct_scores = torch.cat(struct_scores)
-
-                    if GPU is not None:
-                        struct_corrects = autograd.Variable(torch.LongTensor(struct_corrects)).view(-1).cuda(GPU)
-                    else:
-                        struct_corrects = autograd.Variable(torch.LongTensor(struct_corrects)).view(-1)
-                    logsoftmax = nn.LogSoftmax()
-                    softmax = logsoftmax(struct_scores)
-                    loss = struct_loss_function(softmax, struct_corrects)
-                    struct_loss += loss
-                    total_cost += loss.data[0]
-                    
-                    errors.append(loss.data[0])
-                    loss.backward()
-
-
-                    label_scores, label_corrects = [],[]
-                    for (left, right), correct in example['label_data'].items():
-                        label_scoring = network.label(left, right)
-                        label_scores.append(label_scoring)
-                        label_corrects.append(correct)
-                    label_scores = torch.cat(label_scores)
-
-                    if GPU is not None:
-                        label_corrects = autograd.Variable(torch.LongTensor(label_corrects)).cuda(GPU)
-                    else:
-                        label_corrects = autograd.Variable(torch.LongTensor(label_corrects))
-                    softmax = logsoftmax(label_scores)
-                    loss = label_loss_function(softmax, label_corrects)
-                    label_loss += loss
-                    total_cost += loss.data[0]
-                    
-                    errors.append(loss.data[0])
-                    loss.backward()
-
+                        if GPU is not None:
+                            correct = autograd.Variable(torch.LongTensor([correct])).cuda(GPU)
+                        else:
+                            correct = autograd.Variable(torch.LongTensor([correct]))
+                        scores,hidden = network.struct(left, right)
+                        probs = logsoftmax(scores)
+                        loss = f_loss(probs, correct)
+                        errors.append(loss)
                     total_states += len(example['struct_data'])
+
+                    for (left, right), correct in example['label_data'].items():
+                        if GPU is not None:
+                            correct = autograd.Variable(torch.LongTensor([correct])).cuda(GPU)
+                        else:
+                            correct = autograd.Variable(torch.LongTensor([correct]))
+                        scores,hidden = network.label(left, right)
+                        probs = logsoftmax(scores)
+                        loss = f_loss(probs, correct)
+                        errors.append(loss)
                     total_states += len(example['label_data'])
+
 
 
                 #batch_error = dynet.esum(errors)
@@ -404,10 +402,20 @@ class Network:
 
                 #struct_loss.backward()
                 #label_loss.backward()
-                
-                #print(["{.2f}".format(x) for x in errors])
-                #print(len(errors))
-                #print(sum(errors))
+
+                #print(errors)
+
+
+                batch_error = torch.sum(torch.cat(errors))
+                total_cost += batch_error.data[0]
+                batch_error.backward()
+
+                """
+                print(["{:.2f}".format(x.data[0]) for x in errors])
+                print(len(errors))
+                print(sum(errors))
+                print(total_states)
+                """
 
                 mean_cost = (total_cost / total_states)
 

@@ -309,7 +309,7 @@ class Parser(object):
                     action = correct_action
                 else:
                     left, right = features
-                    scores = network.struct(
+                    scores,hidden = network.struct(
                         left,
                         right,
                         test=True,
@@ -338,7 +338,7 @@ class Parser(object):
                 action = correct_action
             else:
                 left, right = features
-                scores = network.label(
+                scores,hidden = network.label(
                     left,
                     right,
                     test=True,
@@ -395,7 +395,7 @@ class Parser(object):
                 action = 'comb'
             else:
                 left, right = state.s_features()
-                scores = network.struct(
+                scores,hidden = network.struct(
                     left,
                     right,
                     test=True,
@@ -408,7 +408,7 @@ class Parser(object):
 
 
             left, right = state.l_features()
-            scores = network.label(
+            scores,hidden = network.label(
                 left,
                 right,
                 test=True,
