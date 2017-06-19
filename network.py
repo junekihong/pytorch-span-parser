@@ -25,11 +25,6 @@ torch.manual_seed(1)
 
 from pprint import pprint
 
-def renormalize(scores):
-    exp = np.exp(scores * 1)
-    softmax = exp / (exp.sum())
-    return -np.log(softmax)
-
 def repackage_hidden(h):
     """Wraps hidden states in new Variables, to detach them from their history."""
     if type(h) == autograd.Variable:
@@ -67,6 +62,7 @@ class LSTM(nn.Module):
             self.lstm = nn.LSTM(word_dims + tag_dims,
                                 lstm_units,
                                 num_layers=2,
+                                dropout=droprate,
                                 bidirectional=True)
         self.init_weights()
 
@@ -83,9 +79,11 @@ class LSTM(nn.Module):
 
         sentence = torch.cat([wordvecs, tagvecs])
         sentence = sentence.view(1, sentence.size()[1], sentence.size()[0])
+
         lstm_out, self.hidden_lstm = self.lstm(sentence)
-        self.embeddings = lstm_out.view(lstm_out.size()[1], lstm_out.size()[2])
-        return self.embeddings, self.hidden_lstm
+        self.embeddings = torch.cat(self.hidden_lstm)
+        self.embeddings = self.embeddings.view(self.embeddings.size(1), self.embeddings.size(2), self.embeddings.size(0))
+        return self.embeddings
         
     def init_hidden(self, batch_size):
         weight = next(self.parameters()).data
@@ -107,7 +105,6 @@ class Action_Network(nn.Module):
             out_dim,
             droprate,
             spans,
-            GPU=None,
     ):
         super(Action_Network, self).__init__()
 
@@ -118,14 +115,8 @@ class Action_Network(nn.Module):
         self.spans = spans
 
         self.drop = nn.Dropout(droprate)
-        self.GPU = GPU
-
-        if GPU is not None:
-            self.span2hidden = nn.Linear(2 * spans * lstm_units, hidden_units).cuda(GPU)
-            self.hidden2out = nn.Linear(hidden_units, out_dim).cuda(GPU)
-        else:
-            self.span2hidden = nn.Linear(2 * spans * lstm_units, hidden_units)
-            self.hidden2out = nn.Linear(hidden_units, out_dim)
+        self.span2hidden = nn.Linear(8 * spans * lstm_units, hidden_units)
+        self.hidden2out = nn.Linear(hidden_units, out_dim)
         self.init_weights()
 
     def init_weights(self):
@@ -140,7 +131,10 @@ class Action_Network(nn.Module):
         for left_index, right_index in zip(lefts, rights):
             embedding = embeddings[right_index] - embeddings[left_index - 1]
             span_out.append(embedding)
+
         hidden_input = torch.cat(span_out)
+        hidden_input = hidden_input.view(hidden_input.size(0)*hidden_input.size(1))
+
 
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
@@ -178,12 +172,18 @@ class Network:
         self.GPU = GPU
 
         self.struct = Action_Network(lstm_units, hidden_units, 
-                                     struct_out, droprate, struct_spans, GPU)
+                                     struct_out, droprate, struct_spans)
         self.label = Action_Network(lstm_units, hidden_units, 
-                                    label_out, droprate, label_spans, GPU)
+                                    label_out, droprate, label_spans)
         self.lstm = LSTM(word_count, tag_count,
                          word_dims, tag_dims,
-                         lstm_units, droprate, GPU)
+                         lstm_units, droprate)
+        
+        if GPU is not None:
+            self.struct.cuda(GPU)
+            self.label.cuda(GPU)
+            self.lstm.cuda(GPU)
+
 
     def save(self, filename):
         """
@@ -272,17 +272,10 @@ class Network:
             GPU=GPU,
         )
 
-        if GPU is not None:
-            f_loss = nn.NLLLoss().cuda(GPU)
-            logsoftmax = nn.LogSoftmax().cuda(GPU)
-            #f_loss = nn.CrossEntropyLoss().cuda(GPU)
-        else:
-            f_loss = nn.NLLLoss()
-            logsoftmax = nn.LogSoftmax()
-            #f_loss = nn.CrossEntropyLoss()
-
-        struct_trainer = optim.Adam(network.struct.parameters(), lr = 0.0001)
-        label_trainer = optim.Adam(network.label.parameters(), lr = 0.0001)
+        f_loss = nn.CrossEntropyLoss()
+        struct_optimizer = optim.Adam(network.struct.parameters(), lr = 0.0001)
+        label_optimizer = optim.Adam(network.label.parameters(), lr = 0.0001)
+        lstm_optimizer = optim.Adam(network.lstm.parameters(), lr = 0.0001)
 
 
         print('Hidden units: {},  per-LSTM units: {}'.format(
@@ -312,6 +305,11 @@ class Network:
 
         best_acc = FScore()
         hidden = network.lstm.init_hidden(batch_size)
+
+        
+        lstm_prev_params = [x for x in network.lstm.lstm.parameters()]
+        struct_prev_params = [x for x in network.struct.parameters()]
+        
 
         for epoch in xrange(1, epochs + 1):
             print('........... epoch {} ...........'.format(epoch))
@@ -356,30 +354,28 @@ class Network:
                         if r < drop_prob:
                             example['w'][i] = 0
 
-                    embeddings, hidden = network.lstm(
+                    embeddings = network.lstm(
                         example['w'],
                         example['t'],
                     )
 
                     for (left, right), correct in example['struct_data'].items():
-                        if GPU is not None:
-                            correct = autograd.Variable(torch.LongTensor([correct])).cuda(GPU)
-                        else:
-                            correct = autograd.Variable(torch.LongTensor([correct]))
+                        correct = autograd.Variable(torch.LongTensor([correct]))
+                        if network.GPU is not None:
+                            correct = correct.cuda(network.GPU)
+
                         scores = network.struct(embeddings, left, right)
-                        probs = logsoftmax(scores)
-                        loss = f_loss(probs, correct)
+                        loss = f_loss(scores, correct)
                         errors.append(loss)
                     total_states += len(example['struct_data'])
 
                     for (left, right), correct in example['label_data'].items():
-                        if GPU is not None:
-                            correct = autograd.Variable(torch.LongTensor([correct])).cuda(GPU)
-                        else:
-                            correct = autograd.Variable(torch.LongTensor([correct]))
+                        correct = autograd.Variable(torch.LongTensor([correct]))
+                        if network.GPU is not None:
+                            correct = correct.cuda(network.GPU)
+
                         scores = network.label(embeddings, left, right)
-                        probs = logsoftmax(scores)
-                        loss = f_loss(probs, correct)
+                        loss = f_loss(scores, correct)
                         errors.append(loss)
                     total_states += len(example['label_data'])
 
@@ -391,9 +387,51 @@ class Network:
                 #trainer.update()
 
                 batch_error = torch.sum(torch.cat(errors))
-                total_cost += batch_error.data[0]
                 batch_error.backward()
+                struct_optimizer.step()
+                label_optimizer.step()
+                lstm_optimizer.step()
+
+                total_cost += batch_error.data[0]
+
                 mean_cost = (total_cost / total_states)
+                
+                
+
+
+                """
+                print()
+                view = []
+                struct_params = [x for x in network.struct.parameters()]
+                for curr,prev in zip(struct_params, struct_prev_params):
+                    if not curr.eq(prev):
+                        print("STRUCT UPDATE HAPPENED")
+                print("STRUCT UPDATE CHECK FINISHED")
+                for x in struct_params:
+                    if len(x.size()) == 2:
+                        view.append(x[0][0])
+                    else:
+                        view.append(x[0])
+                print(torch.cat(view))
+
+                view = []
+                lstm_params = [x for x in network.lstm.lstm.parameters()]
+                for curr,prev in zip(lstm_params, lstm_prev_params):
+                    if not curr.eq(prev):
+                        print("LSTM UPDATE HAPPENED")
+                print("LSTM UPDATE CHECK FINISHED")
+                for x in lstm_params:
+                    if len(x.size()) == 2:
+                        view.append(x[0][0])
+                    else:
+                        view.append(x[0])
+                print(torch.cat(view))
+                #raw_input()
+                struct_prev_params = struct_params
+                lstm_prev_params = lstm_params
+                """
+
+
 
                 print(
                     '\rBatch {}  Mean Cost {:.4f} [Train: {}]'.format(

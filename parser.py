@@ -284,16 +284,13 @@ class Parser(object):
 
         w = data['w']
         t = data['t']
-
+        w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
+        t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
         if network.GPU is not None:
-            w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(network.GPU))
-            t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(network.GPU))
-        else:
-            w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
-            t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
+            w = w.cuda(network.GPU)
+            t = t.cuda(network.GPU)
 
-
-        embeddings, hidden = network.lstm(w, t, test=True)
+        embeddings = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -319,14 +316,19 @@ class Parser(object):
                         right,
                         test=True,
                     )
-                    scores = scores.cpu().data.numpy()[0]
 
+                    probs = torch.nn.functional.softmax(scores).cpu().data.numpy()[0]
+
+                    """
+                    scores = scores.cpu().data.numpy()[0]
                     # sample from distribution
                     exp = np.exp(scores * alpha)
                     softmax = exp / (exp.sum())
+                    """
+
                     r = np.random.random()
 
-                    if r <= softmax[0]:
+                    if r <= probs[0]:
                         action = 'sh'
                     else:
                         action = 'comb'
@@ -383,14 +385,13 @@ class Parser(object):
 
         w, t = fm.sentence_sequences(sentence)
 
+        w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
+        t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
         if network.GPU is not None:
-            w = autograd.Variable(torch.LongTensor([int(x) for x in w]).cuda(network.GPU))
-            t = autograd.Variable(torch.LongTensor([int(x) for x in t]).cuda(network.GPU))
-        else:
-            w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
-            t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
+            w = w.cuda(network.GPU)
+            t = t.cuda(network.GPU)
 
-        embeddings, hidden = network.lstm(w, t, test=True)
+        embeddings = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
