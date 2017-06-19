@@ -280,9 +280,13 @@ class Network:
         )
 
         f_loss = nn.CrossEntropyLoss()
-        struct_optimizer = optim.Adam(network.struct.parameters(), lr = 0.0001)
-        label_optimizer = optim.Adam(network.label.parameters(), lr = 0.0001)
-        lstm_optimizer = optim.Adam(network.lstm.parameters(), lr = 0.0001)
+        optimizer = optim.Adam([x for x in network.struct.parameters()] + 
+                               [x for x in network.label.parameters()] + 
+                               [x for x in network.lstm.parameters()], 
+                               lr = 0.0001)
+        #struct_optimizer = optim.Adam(network.struct.parameters(), lr = 0.0001)
+        #label_optimizer = optim.Adam(network.label.parameters(), lr = 0.0001)
+        #lstm_optimizer = optim.Adam(network.lstm.parameters(), lr = 0.0001)
 
 
         print('Hidden units: {},  per-LSTM units: {}'.format(
@@ -330,7 +334,7 @@ class Network:
             for b in xrange(num_batches):
                 batch = training_data[(b * batch_size) : ((b + 1) * batch_size)]
                 
-                hidden = repackage_hidden(hidden)
+                #hidden = repackage_hidden(hidden)
                 network.struct.zero_grad()
                 network.label.zero_grad()
                 network.lstm.zero_grad()
@@ -400,9 +404,7 @@ class Network:
 
                 batch_error = torch.sum(torch.cat(errors))
                 batch_error.backward()
-                struct_optimizer.step()
-                label_optimizer.step()
-                lstm_optimizer.step()
+                optimizer.step()
 
                 total_cost += batch_error.data[0]
 
