@@ -126,20 +126,27 @@ class Action_Network(nn.Module):
         self.hidden2out.bias.data.fill_(0)
         self.hidden2out.weight.data.uniform_(-initrange, initrange)
 
-    def forward(self, embeddings, lefts, rights, test=False):
-        span_out = []
-        for left_index, right_index in zip(lefts, rights):
-            embedding = embeddings[right_index] - embeddings[left_index - 1]
-            span_out.append(embedding)
+    def forward(self, embeddings, indices, test=False):
 
-        hidden_input = torch.cat(span_out)
-        hidden_input = hidden_input.view(hidden_input.size(0)*hidden_input.size(1))
+        hidden_inputs = []
+        for lefts,rights in indices:
+            span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                embedding = embeddings[right_index] - embeddings[left_index - 1]
+                span_out.append(embedding)
+            hidden_input = torch.cat(span_out)
+            hidden_input = hidden_input.view(1, hidden_input.size(0)*hidden_input.size(1))
+            hidden_inputs.append(hidden_input)
 
+        hidden_inputs = torch.cat(hidden_inputs)
 
         if self.droprate > 0 and not test:
-            hidden_input = self.drop(hidden_input)
-        hidden_output = nn.functional.relu(self.span2hidden(hidden_input.view(1, hidden_input.size(0))))
-        scores = self.hidden2out(hidden_output)
+            hidden_inputs = self.drop(hidden_inputs)
+
+
+        hidden_outputs = self.span2hidden(hidden_inputs)
+        hidden_outputs = nn.functional.relu(hidden_outputs)
+        scores = self.hidden2out(hidden_outputs)
         return scores
 
 
@@ -359,25 +366,30 @@ class Network:
                         example['t'],
                     )
 
+                    indices,targets = [],[]
                     for (left, right), correct in example['struct_data'].items():
-                        correct = autograd.Variable(torch.LongTensor([correct]))
-                        if network.GPU is not None:
-                            correct = correct.cuda(network.GPU)
+                        indices.append((left,right))
+                        targets.append(correct)
 
-                        scores = network.struct(embeddings, left, right)
-                        loss = f_loss(scores, correct)
-                        errors.append(loss)
-                    total_states += len(example['struct_data'])
+                    scores = network.struct(embeddings, indices)
+                    targets = autograd.Variable(torch.LongTensor(targets))
+                    if network.GPU is not None:
+                        targets = targets.cuda(network.GPU)
+                    loss = f_loss(scores, targets)
+                    errors.append(loss)
+                    total_states += 1#len(example['struct_data'])
 
+                    indices,targets = [],[]
                     for (left, right), correct in example['label_data'].items():
-                        correct = autograd.Variable(torch.LongTensor([correct]))
-                        if network.GPU is not None:
-                            correct = correct.cuda(network.GPU)
-
-                        scores = network.label(embeddings, left, right)
-                        loss = f_loss(scores, correct)
-                        errors.append(loss)
-                    total_states += len(example['label_data'])
+                        indices.append((left,right))
+                        targets.append(correct)
+                    scores = network.label(embeddings, indices)
+                    targets = autograd.Variable(torch.LongTensor(targets))
+                    if network.GPU is not None:
+                        targets = targets.cuda(network.GPU)
+                    loss = f_loss(scores, targets)
+                    errors.append(loss)
+                    total_states += 1#len(example['label_data'])
 
 
 
@@ -395,43 +407,6 @@ class Network:
                 total_cost += batch_error.data[0]
 
                 mean_cost = (total_cost / total_states)
-                
-                
-
-
-                """
-                print()
-                view = []
-                struct_params = [x for x in network.struct.parameters()]
-                for curr,prev in zip(struct_params, struct_prev_params):
-                    if not curr.eq(prev):
-                        print("STRUCT UPDATE HAPPENED")
-                print("STRUCT UPDATE CHECK FINISHED")
-                for x in struct_params:
-                    if len(x.size()) == 2:
-                        view.append(x[0][0])
-                    else:
-                        view.append(x[0])
-                print(torch.cat(view))
-
-                view = []
-                lstm_params = [x for x in network.lstm.lstm.parameters()]
-                for curr,prev in zip(lstm_params, lstm_prev_params):
-                    if not curr.eq(prev):
-                        print("LSTM UPDATE HAPPENED")
-                print("LSTM UPDATE CHECK FINISHED")
-                for x in lstm_params:
-                    if len(x.size()) == 2:
-                        view.append(x[0][0])
-                    else:
-                        view.append(x[0])
-                print(torch.cat(view))
-                #raw_input()
-                struct_prev_params = struct_params
-                lstm_prev_params = lstm_params
-                """
-
-
 
                 print(
                     '\rBatch {}  Mean Cost {:.4f} [Train: {}]'.format(

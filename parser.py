@@ -312,8 +312,7 @@ class Parser(object):
                     left, right = features
                     scores = network.struct(
                         embeddings,
-                        left,
-                        right,
+                        ((left,right),),
                         test=True,
                     )
 
@@ -347,8 +346,7 @@ class Parser(object):
                 left, right = features
                 scores = network.label(
                     embeddings,
-                    left,
-                    right,
+                    ((left, right),),
                     test=True,
                 )
                 scores = scores.cpu().data.numpy()[0]
@@ -403,8 +401,7 @@ class Parser(object):
                 left, right = state.s_features()
                 scores = network.struct(
                     embeddings,
-                    left,
-                    right,
+                    ((left,right),),
                     test=True,
                 )
                 scores = scores.cpu().data.numpy()[0]
@@ -418,8 +415,7 @@ class Parser(object):
             left, right = state.l_features()
             scores = network.label(
                 embeddings,
-                left,
-                right,
+                ((left,right),),
                 test=True,
             )#.cpu().data.numpy()[0]
             scores = scores.cpu().data.numpy()[0]
