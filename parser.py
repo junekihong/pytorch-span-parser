@@ -263,6 +263,7 @@ class Parser(object):
             Follow softmax distribution for structural data.
         """
 
+        # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
         #dynet.renew_cg()
         #network.prep_params()
 
@@ -361,6 +362,7 @@ class Parser(object):
     @staticmethod
     def parse(sentence, fm, network):
 
+        # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
         #dynet.renew_cg()
         #network.prep_params()
 

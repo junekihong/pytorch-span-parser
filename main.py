@@ -13,6 +13,8 @@ import argparse
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(prog='Span-Based Constituency Parser')
+    
+    """
     parser.add_argument(
         '--dynet-mem',
         dest='dynet_mem',
@@ -31,6 +33,8 @@ if __name__ == '__main__':
         help='Seed for PNG. (DEFAULT=0 : generate)',
         default=0,
     )
+    """
+
     parser.add_argument(
         '--model',
         dest='model',
@@ -149,6 +153,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    """
     # Overriding DyNet defaults
     sys.argv.insert(1, str(args.dynet_mem))
     sys.argv.insert(1, '--dynet-mem')
@@ -156,6 +161,7 @@ if __name__ == '__main__':
     sys.argv.insert(1, '--dynet-l2')
     sys.argv.insert(1, str(args.dynet_seed))
     sys.argv.insert(1, '--dynet-seed')
+    """
 
     if args.vocab is not None:
         from features import FeatureMapper
@@ -184,7 +190,7 @@ if __name__ == '__main__':
 
         test_trees = PhraseTree.load_treefile(args.test)
         print('Loaded test trees from {}'.format(args.test))
-        network = Network.load(args.model, args.GPU)
+        network = Network.load(args.model, args.gpu)
         print('Loaded model from: {}'.format(args.model))
         accuracy = Parser.evaluate_corpus(test_trees, fm, network)
         print('Accuracy: {}'.format(accuracy))

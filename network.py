@@ -9,7 +9,6 @@ import time
 import random
 import sys
 
-#import dynet
 import numpy as np
 
 import torch
