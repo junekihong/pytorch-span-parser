@@ -8,17 +8,11 @@ from __future__ import division
 import numpy as np
 from collections import defaultdict
 
-#import dynet
 import torch
 import torch.autograd as autograd
 
 from phrase_tree import PhraseTree, FScore
 
-
-def renormalize(scores):
-    exp = np.exp(scores * 1)
-    softmax = exp / (exp.sum())
-    return np.log(softmax)
 
 class Parser(object):
   
@@ -253,7 +247,6 @@ class Parser(object):
                 s_features.append((features, action))
             state.take_action(action)
 
-
             action = state.l_oracle(tree)
             features = state.l_features()
             l_features.append((features, action))
@@ -290,7 +283,7 @@ class Parser(object):
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
-        embeddings = network.lstm(w, t, test=True)
+        embeddings,hidden = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -317,13 +310,6 @@ class Parser(object):
                     )
 
                     probs = torch.nn.functional.softmax(scores).cpu().data.numpy()[0]
-
-                    """
-                    scores = scores.cpu().data.numpy()[0]
-                    # sample from distribution
-                    exp = np.exp(scores * alpha)
-                    softmax = exp / (exp.sum())
-                    """
 
                     r = np.random.random()
 
@@ -389,7 +375,7 @@ class Parser(object):
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
-        embeddings = network.lstm(w, t, test=True)
+        embeddings,hidden = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -405,12 +391,9 @@ class Parser(object):
                     test=True,
                 )
                 scores = scores.cpu().data.numpy()[0]
-                #scores = renormalize(scores)
-
                 action_index = np.argmax(scores)
                 action = fm.s_action(action_index)
             state.take_action(action)
-
 
             left, right = state.l_features()
             scores = network.label(
@@ -429,7 +412,6 @@ class Parser(object):
 
         if not state.finished():
             raise RuntimeError('Bad ending state!')
-
 
         tree = state.stack[0][2][0]
         tree.propagate_sentence(sentence)
