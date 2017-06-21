@@ -284,6 +284,7 @@ class Parser(object):
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
+        hidden = network.lstm.init_hidden(len(w))
         embeddings,hidden = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
@@ -326,7 +327,10 @@ class Parser(object):
             correct_action = state.l_oracle(tree)
             label_data[features] = fm.l_action_index(correct_action)
 
-            r = np.random.random()
+
+
+
+            r = np.random.random()            
             if r < beta:
                 action = correct_action
             else:
@@ -365,7 +369,7 @@ class Parser(object):
         # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
         #dynet.renew_cg()
         #network.prep_params()
-
+        
         n = len(sentence)
         state = Parser(n)
 
@@ -377,10 +381,10 @@ class Parser(object):
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
+        hidden = network.lstm.init_hidden(len(w))
         embeddings,hidden = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
-
             if not state.can_combine():
                 action = 'sh'
             elif not state.can_shift():
@@ -404,13 +408,14 @@ class Parser(object):
                 test=True,
             )#.cpu().data.numpy()[0]
             scores = scores.cpu().data.numpy()[0]
-
             if step < (2 * n - 2):
                 action_index = np.argmax(scores)
             else:
                 action_index = 1 + np.argmax(scores[1:])
             action = fm.l_action(action_index)
             state.take_action(action)
+
+
 
         if not state.finished():
             raise RuntimeError('Bad ending state!')
@@ -422,11 +427,16 @@ class Parser(object):
 
     @staticmethod
     def evaluate_corpus(trees, fm, network):
+
+        f = open("temp.trees", "w")
         accuracy = FScore()
         for tree in trees:
             predicted = Parser.parse(tree.sentence, fm, network)
             local_accuracy = predicted.compare(tree)
             accuracy += local_accuracy
+            
+            f.write(str(predicted) + "\n")
+        f.close()
         return accuracy
 
 
