@@ -78,41 +78,13 @@ class LSTM(nn.Module):
 
         wordvecs = self.word_embed(word_inds)
         tagvecs = self.tag_embed(tag_inds)
-
-        #print(wordvecs.size(), tagvecs.size())
-        
-
         wordvecs = wordvecs.view(self.word_dims, len(word_inds))
         tagvecs = tagvecs.view(self.tag_dims, len(tag_inds))
-
-        #print(wordvecs.size(), tagvecs.size())
 
         sentence = torch.cat([wordvecs, tagvecs])
         sentence = sentence.view(sentence.size(1), 1, sentence.size(0))
 
-        #print(sentence.size())
-        #exit()
-
         lstm_out, hidden = self.lstm(sentence)
-        
-
-        #print(lstm_out.size())
-        #exit()
-
-
-
-        #print(lstm_out.size())
-        #print([x.size() for x in hidden])
-
-        #exit()
-        #result = torch.cat(hidden)
-        #result = result.view(result.size(1), result.size(2), result.size(0))
-
-        #print([x.size() for x in hidden])
-        #print(hidden)
-        #print(result)
-        #exit()
-
         return lstm_out, hidden
         
     def init_hidden(self, batch_size):
@@ -419,8 +391,6 @@ class Network:
                     errors.append(loss)
                     total_states += 1#len(example['struct_data'])
 
-
-                    #Temporary: Only train for struct actions. We'll decode the label actions with an oracle during test time.
                     indices,targets = [],[]
                     for (left, right), correct in example['label_data'].items():
                         indices.append((left,right))
