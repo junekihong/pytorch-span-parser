@@ -265,7 +265,7 @@ class Parser(object):
 
         # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
         #dynet.renew_cg()
-        #network.prep_params()
+        network.lstm.init_hidden()
 
         struct_data = {}
         label_data = {}
@@ -276,16 +276,13 @@ class Parser(object):
         n = len(sentence)
         state = Parser(n)
 
-        w = data['w']
-        t = data['t']
-        w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
-        t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
+        w = autograd.Variable(torch.LongTensor([int(x) for x in data['w']]))
+        t = autograd.Variable(torch.LongTensor([int(x) for x in data['t']]))
         if network.GPU is not None:
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
-        hidden = network.lstm.init_hidden(len(w))
-        embeddings,hidden = network.lstm(w, t, test=True)
+        embeddings = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -297,9 +294,7 @@ class Parser(object):
                 action = 'comb'
                 correct_action = 'comb'
             else:
-                
                 correct_action = state.s_oracle(tree)
-
                 r = np.random.random()
                 if r < beta:
                     action = correct_action
@@ -326,8 +321,6 @@ class Parser(object):
             features = state.l_features()
             correct_action = state.l_oracle(tree)
             label_data[features] = fm.l_action_index(correct_action)
-
-
 
 
             r = np.random.random()            
@@ -369,7 +362,9 @@ class Parser(object):
         # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
         #dynet.renew_cg()
         #network.prep_params()
-        
+        network.lstm.init_hidden()
+
+
         n = len(sentence)
         state = Parser(n)
 
@@ -381,8 +376,7 @@ class Parser(object):
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
-        hidden = network.lstm.init_hidden(len(w))
-        embeddings,hidden = network.lstm(w, t, test=True)
+        embeddings = network.lstm(w, t, test=True)
 
         for step in xrange(2 * n - 1):
             if not state.can_combine():
@@ -427,16 +421,19 @@ class Parser(object):
 
     @staticmethod
     def evaluate_corpus(trees, fm, network):
+        network.struct.eval()
+        network.label.eval()
+        network.lstm.eval()
 
-        f = open("temp.trees", "w")
+        #f = open("temp.trees", "w")
         accuracy = FScore()
         for tree in trees:
             predicted = Parser.parse(tree.sentence, fm, network)
             local_accuracy = predicted.compare(tree)
             accuracy += local_accuracy
             
-            f.write(str(predicted) + "\n")
-        f.close()
+            #f.write(str(predicted) + "\n")
+        #f.close()
         return accuracy
 
 

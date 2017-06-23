@@ -24,14 +24,6 @@ torch.manual_seed(1)
 from pprint import pprint
 
 
-def repackage_hidden(h):
-    """Wraps hidden states in new Variables, to detach them from their history."""
-    if type(h) == autograd.Variable:
-        return autograd.Variable(h.data)
-    else:
-        return tuple(repackage_hidden(v) for v in h)
-
-
 class LSTM(nn.Module):
     def __init__(
             self,
@@ -68,33 +60,31 @@ class LSTM(nn.Module):
     def forward(self, word_inds, tag_inds, test=False):
         # Setting this to true or false will enable/disable dropout.
         if test:
-            self.word_embed.train(False)
-            self.tag_embed.train(False)
-            self.lstm.train(False)
+            self.eval()
         else:
-            self.word_embed.train(True)
-            self.tag_embed.train(True)
-            self.lstm.train(True)
+            self.train()
+
+        sentences = []
 
         wordvecs = self.word_embed(word_inds)
         tagvecs = self.tag_embed(tag_inds)
         wordvecs = wordvecs.view(self.word_dims, len(word_inds))
         tagvecs = tagvecs.view(self.tag_dims, len(tag_inds))
-
         sentence = torch.cat([wordvecs, tagvecs])
         sentence = sentence.view(sentence.size(1), 1, sentence.size(0))
 
-        lstm_out, hidden = self.lstm(sentence)
-        return lstm_out, hidden
+        lstm_out, hidden = self.lstm(sentence, self.hidden)
+        return lstm_out
         
-    def init_hidden(self, batch_size):
+    def init_hidden(self, batch_size=1):
         weight = next(self.parameters()).data
         num_layers = 2
-        result = (autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
+        hidden = (autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
                   autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
         if self.GPU is not None:
-            result = (x.cuda(self.GPU) for x in result)
-        return result
+            hidden = (x.cuda(self.GPU) for x in hidden)
+        self.hidden = hidden
+        return hidden
 
 
 class Action_Network(nn.Module):
@@ -129,27 +119,38 @@ class Action_Network(nn.Module):
 
     def forward(self, embeddings, indices, test=False):
 
-        # Setting this to true or false will enable/disable dropout. Probably not necessary to do here.
+        # Setting test here will enable/disable dropout. Probably not necessary to do here.
         if test:
-            self.span2hidden.train(False)
-            self.hidden2out.train(False)
+            self.eval()
         else:
-            self.span2hidden.train(True)
-            self.hidden2out.train(True)
+            self.train()
+
+        fwd_out,back_out = torch.split(embeddings, self.lstm_units, dim=2)
 
         hidden_inputs = []
         for lefts,rights in indices:
             span_out = []
 
+            fwd_span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
+            fwd_span_vec = torch.cat(fwd_span_out)
+            back_span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
+            back_span_vec = torch.cat(back_span_out)
+            hidden_input = torch.cat([fwd_span_vec, back_span_vec])
+            hidden_input = hidden_input.view(1, hidden_input.size(0) * hidden_input.size(1))
+            hidden_inputs.append(hidden_input)
+
+            """
             for left_index, right_index in zip(lefts, rights):
                 embedding = embeddings[right_index] - embeddings[left_index - 1]
                 span_out.append(embedding.view(embedding.size(1)))
-
             hidden_input = torch.cat(span_out)
             hidden_input = hidden_input.view(1, hidden_input.size(0))
-            #hidden_input = hidden_input.view(1, hidden_input.size(0)*hidden_input.size(1))
             hidden_inputs.append(hidden_input)
-
+            """
 
         hidden_inputs = torch.cat(hidden_inputs)
 
@@ -288,15 +289,17 @@ class Network:
             droprate=droprate,
             GPU=GPU,
         )
-
+        
         f_loss = nn.CrossEntropyLoss()
+        if GPU is not None:
+            f_loss = f_loss.cuda(GPU)
 
-
-
-        optimizer = optim.Adam([x for x in network.struct.parameters()] + 
-                               [x for x in network.label.parameters()] + 
-                               [x for x in network.lstm.parameters()], 
-                               lr = 0.0001)
+        optimizer = optim.Adadelta([x for x in network.struct.parameters()] + 
+                                   [x for x in network.label.parameters()] + 
+                                   [x for x in network.lstm.parameters()], 
+                                   rho=0.99,
+                                   eps=1e-7)
+        random.seed(1)
 
         #optimizer = optim.Adam(network.struct.parameters(), lr = 0.0001)
         #optimizer = optim.Adam(network.label.parameters(), lr = 0.0001)
@@ -328,7 +331,7 @@ class Network:
         print('Loaded {} validation trees!'.format(len(dev_trees)))
 
         best_acc = FScore()
-        #hidden = network.lstm.init_hidden(batch_size)
+        hidden = network.lstm.init_hidden()
         
         for epoch in xrange(1, epochs + 1):
             print('........... epoch {} ...........'.format(epoch))
@@ -341,12 +344,8 @@ class Network:
 
             for b in xrange(num_batches):
                 batch = training_data[(b * batch_size) : ((b + 1) * batch_size)]
+                #network.lstm.reset_hidden_history()
                 
-                #hidden = repackage_hidden(hidden)
-                network.struct.zero_grad()
-                network.label.zero_grad()
-                network.lstm.zero_grad()
-
                 explore = [
                     Parser.exploration(
                         example,
@@ -360,7 +359,10 @@ class Network:
                     training_acc += acc
 
                 batch = [example for (example, _) in explore]
-                errors = []
+                batch_loss = 0.0
+                network.lstm.init_hidden()
+
+
                 for example in batch:
 
                     ## random UNKing ##
@@ -373,8 +375,8 @@ class Network:
                         if r < drop_prob:
                             example['w'][i] = 0
 
-                    hidden = network.lstm.init_hidden(len(example['w']))
-                    embeddings,hidden = network.lstm(
+                    #embeddings = network.lstm(examples)
+                    embeddings = network.lstm(
                         example['w'],
                         example['t'],
                     )
@@ -387,8 +389,7 @@ class Network:
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)
-                    loss = f_loss(scores, targets)
-                    errors.append(loss)
+                    batch_loss += f_loss(scores, targets)
                     total_states += 1#len(example['struct_data'])
 
                     indices,targets = [],[]
@@ -399,16 +400,14 @@ class Network:
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)
-                    loss = f_loss(scores, targets)
-                    errors.append(loss)
+                    batch_loss += f_loss(scores, targets)
                     total_states += 1#len(example['label_data'])
-                    
 
-                batch_error = torch.sum(torch.cat(errors))
-                batch_error.backward()
+                optimizer.zero_grad()
+                batch_loss.backward()
                 optimizer.step()
 
-                total_cost += batch_error.data[0]
+                total_cost += batch_loss.data[0]
                 mean_cost = (total_cost / total_states)
                 
                 print(
@@ -433,7 +432,7 @@ class Network:
                         best_acc = dev_acc 
                         network.save(model_save_file)
                         print('    [saved model: {}]'.format(model_save_file)) 
-
+                
             current_time = time.time()
             runmins = (current_time - start_time)/60.
             print('  Elapsed time: {:.2f}m'.format(runmins))
