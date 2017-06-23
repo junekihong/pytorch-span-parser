@@ -265,7 +265,7 @@ class Parser(object):
 
         # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
         #dynet.renew_cg()
-        network.lstm.init_hidden()
+        #network.lstm.init_hidden()
 
         struct_data = {}
         label_data = {}
@@ -323,6 +323,9 @@ class Parser(object):
             label_data[features] = fm.l_action_index(correct_action)
 
 
+            # Temporary: Only train struct actions. Use the oracle for label actions.
+            #state.take_action(correct_action)
+
             r = np.random.random()            
             if r < beta:
                 action = correct_action
@@ -342,6 +345,7 @@ class Parser(object):
                 action = fm.l_action(action_index)
             state.take_action(action)
 
+
         predicted = state.stack[0][2][0]
         predicted.propagate_sentence(sentence)
         accuracy = predicted.compare(tree)
@@ -357,12 +361,12 @@ class Parser(object):
 
 
     @staticmethod
-    def parse(sentence, fm, network):
+    def parse(sentence, fm, network, tree):
 
         # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
         #dynet.renew_cg()
         #network.prep_params()
-        network.lstm.init_hidden()
+        #network.lstm.init_hidden()
 
 
         n = len(sentence)
@@ -394,6 +398,10 @@ class Parser(object):
                 action_index = np.argmax(scores)
                 action = fm.s_action(action_index)
             state.take_action(action)
+
+            # Temporary: Only do struct actions. Use oracle for label actions.
+            #correct_label_action = state.l_oracle(tree)
+            #state.take_action(correct_label_action)
 
             left, right = state.l_features()
             scores = network.label(
@@ -428,7 +436,7 @@ class Parser(object):
         #f = open("temp.trees", "w")
         accuracy = FScore()
         for tree in trees:
-            predicted = Parser.parse(tree.sentence, fm, network)
+            predicted = Parser.parse(tree.sentence, fm, network,  tree)
             local_accuracy = predicted.compare(tree)
             accuracy += local_accuracy
             

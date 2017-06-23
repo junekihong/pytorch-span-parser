@@ -46,6 +46,7 @@ class LSTM(nn.Module):
                             num_layers=2,
                             dropout=droprate,
                             bidirectional=True)
+        
         if GPU is not None:
             self.word_embed = self.word_embed.cuda(GPU)
             self.tag_embed = self.tag_embed.cuda(GPU)
@@ -56,6 +57,14 @@ class LSTM(nn.Module):
         initrange = 0.01
         self.word_embed.weight.data.uniform_(-initrange, initrange)
         self.tag_embed.weight.data.uniform_(-initrange, initrange)
+        
+        """
+        for x in self.lstm.parameters():
+            #print(x)
+            print(x.size())
+            #raw_input()
+        exit()
+        """
 
     def forward(self, word_inds, tag_inds, test=False):
         # Setting this to true or false will enable/disable dropout.
@@ -65,11 +74,8 @@ class LSTM(nn.Module):
             self.train()
 
         sentences = []
-
-        wordvecs = self.word_embed(word_inds)
-        tagvecs = self.tag_embed(tag_inds)
-        wordvecs = wordvecs.view(self.word_dims, len(word_inds))
-        tagvecs = tagvecs.view(self.tag_dims, len(tag_inds))
+        wordvecs = self.word_embed(word_inds).view(self.word_dims, len(word_inds))
+        tagvecs = self.tag_embed(tag_inds).view(self.tag_dims, len(tag_inds))
         sentence = torch.cat([wordvecs, tagvecs])
         sentence = sentence.view(sentence.size(1), 1, sentence.size(0))
 
@@ -125,12 +131,12 @@ class Action_Network(nn.Module):
         else:
             self.train()
 
-        fwd_out,back_out = torch.split(embeddings, self.lstm_units, dim=2)
+        #fwd_out,back_out = torch.split(embeddings, self.lstm_units, dim=2)
 
         hidden_inputs = []
         for lefts,rights in indices:
             span_out = []
-
+            """
             fwd_span_out = []
             for left_index, right_index in zip(lefts, rights):
                 fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
@@ -142,15 +148,15 @@ class Action_Network(nn.Module):
             hidden_input = torch.cat([fwd_span_vec, back_span_vec])
             hidden_input = hidden_input.view(1, hidden_input.size(0) * hidden_input.size(1))
             hidden_inputs.append(hidden_input)
-
             """
+
             for left_index, right_index in zip(lefts, rights):
                 embedding = embeddings[right_index] - embeddings[left_index - 1]
                 span_out.append(embedding.view(embedding.size(1)))
             hidden_input = torch.cat(span_out)
             hidden_input = hidden_input.view(1, hidden_input.size(0))
             hidden_inputs.append(hidden_input)
-            """
+
 
         hidden_inputs = torch.cat(hidden_inputs)
 
@@ -299,6 +305,20 @@ class Network:
                                    [x for x in network.lstm.parameters()], 
                                    rho=0.99,
                                    eps=1e-7)
+
+
+        """
+        struct_optimizer = optim.Adadelta([x for x in network.struct.parameters()] + 
+                                          [x for x in network.lstm.parameters()], 
+                                          rho=0.99,
+                                          eps=1e-7)
+        label_optimizer = optim.Adadelta([x for x in network.label.parameters()] + 
+                                         [x for x in network.lstm.parameters()], 
+                                         rho=0.99,
+                                         eps=1e-7)
+        """
+
+
         random.seed(1)
 
         #optimizer = optim.Adam(network.struct.parameters(), lr = 0.0001)
@@ -331,7 +351,7 @@ class Network:
         print('Loaded {} validation trees!'.format(len(dev_trees)))
 
         best_acc = FScore()
-        hidden = network.lstm.init_hidden()
+        network.lstm.init_hidden()
         
         for epoch in xrange(1, epochs + 1):
             print('........... epoch {} ...........'.format(epoch))
@@ -344,7 +364,6 @@ class Network:
 
             for b in xrange(num_batches):
                 batch = training_data[(b * batch_size) : ((b + 1) * batch_size)]
-                #network.lstm.reset_hidden_history()
                 
                 explore = [
                     Parser.exploration(
@@ -359,8 +378,12 @@ class Network:
                     training_acc += acc
 
                 batch = [example for (example, _) in explore]
-                batch_loss = 0.0
-                network.lstm.init_hidden()
+                #batch_loss = 0.0
+                errors = []
+
+                #struct_errors = []
+                #label_errors = []
+                #network.lstm.init_hidden()
 
 
                 for example in batch:
@@ -389,8 +412,11 @@ class Network:
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)
-                    batch_loss += f_loss(scores, targets)
+                    loss = f_loss(scores, targets)
+                    errors.append(loss)
+
                     total_states += 1#len(example['struct_data'])
+
 
                     indices,targets = [],[]
                     for (left, right), correct in example['label_data'].items():
@@ -400,14 +426,29 @@ class Network:
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)
-                    batch_loss += f_loss(scores, targets)
+                    loss = f_loss(scores, targets)
+                    errors.append(loss)
+
                     total_states += 1#len(example['label_data'])
 
+
+                """
+                label_loss = torch.sum(torch.cat(label_errors))
+                label_optimizer.zero_grad()
+                label_loss.backward()
+                label_optimizer.step()
+                """
+
+                batch_loss = torch.sum(torch.cat(errors))
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
 
+                
+
+
                 total_cost += batch_loss.data[0]
+                #total_cost += struct_loss.data[0] # + label_loss.data[0]
                 mean_cost = (total_cost / total_states)
                 
                 print(
