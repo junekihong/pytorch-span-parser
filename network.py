@@ -24,160 +24,6 @@ torch.manual_seed(1)
 from pprint import pprint
 
 
-class LSTM(nn.Module):
-    def __init__(
-            self,
-            word_count, tag_count,
-            word_dims, tag_dims,
-            lstm_units,
-            droprate,
-            GPU=None,
-    ):
-        super(LSTM, self).__init__()
-        self.word_dims, self.tag_dims = word_dims, tag_dims
-        self.lstm_units = lstm_units
-        self.droprate = droprate
-        self.GPU = GPU
-
-        self.drop = nn.Dropout(droprate)
-        self.word_embed = nn.Embedding(word_count, word_dims)
-        self.tag_embed = nn.Embedding(tag_count, tag_dims)
-        self.lstm1 = nn.LSTM(word_dims + tag_dims,
-                            lstm_units,
-                            num_layers=1,
-                            #dropout=droprate,
-                            bidirectional=True)
-        self.lstm2 = nn.LSTM(2 * lstm_units,
-                             lstm_units,
-                             num_layers=1,
-                             #dropout=droprate,
-                             bidirectional=True)
-        
-        if GPU is not None:
-            self.word_embed = self.word_embed.cuda(GPU)
-            self.tag_embed = self.tag_embed.cuda(GPU)
-            self.lstm = self.lstm.cuda(GPU)
-        self.init_weights()
-
-    def init_weights(self):
-        initrange = 0.01
-        self.word_embed.weight.data.uniform_(-initrange, initrange)
-        self.tag_embed.weight.data.uniform_(-initrange, initrange)
-
-    def forward(self, word_inds, tag_inds, test=False):
-        # Setting this to true or false will enable/disable dropout.
-        if test:
-            self.eval()
-        else:
-            self.train()
-
-        sentence = []
-        for (w, t) in zip(word_inds, tag_inds):
-            wordvec = self.word_embed(w)
-            tagvec = self.tag_embed(t)
-            vec = torch.cat([wordvec,tagvec], 1)
-            sentence.append(vec)
-        sentence = torch.cat(sentence)
-        sentence = sentence.view(sentence.size(0), 1, sentence.size(1))
-
-        lstm_out1, hidden1 = self.lstm1(sentence, self.hidden1)
-
-        if self.droprate > 0 and not test:
-            lstm_out1 = self.drop(lstm_out1)
-
-        lstm_out2, hidden2 = self.lstm2(lstm_out1, hidden1)
-        output = torch.cat([lstm_out1, lstm_out2], 2)
-        return output
-        
-    def init_hidden(self, batch_size=1):
-        weight = next(self.parameters()).data
-        num_layers = 1
-        hidden1 = (autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
-                   autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
-        if self.GPU is not None:
-            hidden1 = (x.cuda(self.GPU) for x in hidden1)
-        self.hidden1 = hidden1
-
-
-
-class Action_Network(nn.Module):
-    
-    def __init__(
-            self,
-            lstm_units,
-            hidden_units,
-            out_dim,
-            droprate,
-            spans,
-    ):
-        super(Action_Network, self).__init__()
-
-        self.lstm_units = lstm_units
-        self.hidden_units = hidden_units
-        self.out_dim = out_dim
-        self.droprate = droprate
-        self.spans = spans
-
-        self.drop = nn.Dropout(droprate)
-        self.span2hidden = nn.Linear(4 * spans * lstm_units, hidden_units)
-        self.hidden2out = nn.Linear(hidden_units, out_dim)
-        self.init_weights()
-
-    def init_weights(self):
-        initrange = 0.01
-        self.span2hidden.bias.data.fill_(0)
-        self.span2hidden.weight.data.uniform_(-initrange, initrange)
-        self.hidden2out.bias.data.fill_(0)
-        self.hidden2out.weight.data.uniform_(-initrange, initrange)
-
-    def forward(self, embeddings, indices, test=False):
-
-        # Setting test here will enable/disable dropout. Probably not necessary to do here.
-        if test:
-            self.eval()
-        else:
-            self.train()
-
-        #fwd_out,back_out = torch.split(embeddings, self.lstm_units, dim=2)
-
-        hidden_inputs = []
-        for lefts,rights in indices:
-            span_out = []
-            """
-            fwd_span_out = []
-            for left_index, right_index in zip(lefts, rights):
-                fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
-            fwd_span_vec = torch.cat(fwd_span_out)
-            back_span_out = []
-            for left_index, right_index in zip(lefts, rights):
-                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-            back_span_vec = torch.cat(back_span_out)
-            hidden_input = torch.cat([fwd_span_vec, back_span_vec])
-            hidden_input = hidden_input.view(1, hidden_input.size(0) * hidden_input.size(1))
-            hidden_inputs.append(hidden_input)
-            """
-
-            for left_index, right_index in zip(lefts, rights):
-                embedding = embeddings[right_index] - embeddings[left_index - 1]
-                span_out.append(embedding.view(embedding.size(1)))
-                
-            hidden_input = torch.cat(span_out)
-            hidden_input = hidden_input.view(1, hidden_input.size(0))
-
-            hidden_inputs.append(hidden_input)
-
-
-        hidden_inputs = torch.cat(hidden_inputs)
-
-        if self.droprate > 0 and not test:
-            hidden_inputs = self.drop(hidden_inputs)
-
-        hidden_outputs = self.span2hidden(hidden_inputs)
-        hidden_outputs = nn.functional.relu(hidden_outputs)
-        scores = self.hidden2out(hidden_outputs)
-        return scores
-
-
 class Network:
 
     def __init__(
@@ -204,31 +50,10 @@ class Network:
         self.droprate = droprate
         self.GPU = GPU
 
-
-
-        self.struct = Action_Network(lstm_units, hidden_units, 
-                                     struct_out, droprate, struct_spans)
-        self.label = Action_Network(lstm_units, hidden_units, 
-                                    label_out, droprate, label_spans)
-        self.lstm = LSTM(word_count, tag_count,
-                         word_dims, tag_dims,
-                         lstm_units, droprate)
-
-
-
         self.drop = nn.Dropout(droprate)
         self.activation = nn.functional.relu
         self.word_embed = nn.Embedding(word_count, word_dims)
         self.tag_embed = nn.Embedding(tag_count, tag_dims)
-
-
-        """
-        self.fwd_lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units)
-        self.back_lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units)
-        self.fwd_lstm2 = nn.LSTM(2 * lstm_units, lstm_units)
-        self.back_lstm2 = nn.LSTM(2 * lstm_units, lstm_units)
-        """
-
 
         self.lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units, bidirectional=True)
         self.lstm2 = nn.LSTM(2 * lstm_units, lstm_units, bidirectional=True)
@@ -244,15 +69,6 @@ class Network:
             self.word_embed = self.word_embed.cuda(GPU)
             self.tag_embed = self.tag_embed.cuda(GPU)
 
-
-            """
-            self.fwd_lstm1 = self.fwd_lstm1.cuda(GPU)
-            self.back_lstm1 = self.back_lstm1.cuda(GPU)
-            self.fwd_lstm2 = self.fwd_lstm2.cuda(GPU)
-            self.back_lstm2 = self.back_lstm2.cuda(GPU)
-            """
-
-
             self.lstm1 = self.lstm1.cuda(GPU)
             self.lstm2 = self.lstm2.cuda(GPU)
 
@@ -264,10 +80,6 @@ class Network:
 
         self.trainer = optim.Adadelta([x for x in self.word_embed.parameters()] +
                                       [x for x in self.tag_embed.parameters()] + 
-                                      #[x for x in self.fwd_lstm1.parameters()] + 
-                                      #[x for x in self.back_lstm1.parameters()] +
-                                      #[x for x in self.fwd_lstm2.parameters()] + 
-                                      #[x for x in self.back_lstm2.parameters()] + 
                                       [x for x in self.lstm1.parameters()] +
                                       [x for x in self.lstm2.parameters()] +
                                       [x for x in self.struct_hidden_W.parameters()] + 
@@ -275,14 +87,6 @@ class Network:
                                       [x for x in self.label_hidden_W.parameters()] + 
                                       [x for x in self.label_output_W.parameters()],
                                       rho=0.99, eps=1e-7)
-
-
-
-        if GPU is not None:
-            self.struct.cuda(GPU)
-            self.label.cuda(GPU)
-            self.lstm.cuda(GPU)
-
         self.init_weights()
 
 
@@ -290,6 +94,7 @@ class Network:
         initrange = 0.01
         self.word_embed.weight.data.uniform_(-initrange, initrange)
         self.tag_embed.weight.data.uniform_(-initrange, initrange)
+
 
     def init_hidden(self):
         weight = next(self.lstm1.parameters()).data
@@ -346,8 +151,7 @@ class Network:
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
 
-        hidden_output = self.label_hidden_W(hidden_input)
-        hidden_output = self.activation(hidden_output)
+        hidden_output = self.activation(self.label_hidden_W(hidden_input))
         scores = self.label_output_W(hidden_output)
         return scores
 
@@ -357,11 +161,6 @@ class Network:
         Saves the model using Torch's save functionality.
         """
         torch.save({
-            #"struct_state_dict": self.struct.state_dict(),
-            #"label_state_dict": self.label.state_dict(),
-            #"lstm_state_dict": self.lstm.state_dict(),
-
-
             "word_embed_state_dict": self.word_embed.state_dict(),
             "tag_embed_state_dict": self.tag_embed.state_dict(),
             "lstm1_state_dict": self.lstm1.state_dict(),
@@ -430,9 +229,6 @@ class Network:
         return network
 
 
-
-
-
     @staticmethod
     def train(
         feature_mapper,
@@ -474,32 +270,7 @@ class Network:
         f_loss = nn.CrossEntropyLoss()
         if GPU is not None:
             f_loss = f_loss.cuda(GPU)
-
-        """
-        optimizer = optim.Adadelta([x for x in network.struct.parameters()] + 
-                                   [x for x in network.label.parameters()] + 
-                                   [x for x in network.lstm.parameters()], 
-                                   rho=0.99,
-                                   eps=1e-7)
-        """
-
-        """
-        struct_optimizer = optim.Adadelta([x for x in network.struct.parameters()] + 
-                                          [x for x in network.lstm.parameters()], 
-                                          rho=0.99,
-                                          eps=1e-7)
-        label_optimizer = optim.Adadelta([x for x in network.label.parameters()] + 
-                                         [x for x in network.lstm.parameters()], 
-                                         rho=0.99,
-                                         eps=1e-7)
-        """
-
-
         random.seed(1)
-
-        #optimizer = optim.Adam(network.struct.parameters(), lr = 0.0001)
-        #optimizer = optim.Adam(network.label.parameters(), lr = 0.0001)
-        #optimizer = optim.Adam(network.lstm.parameters(), lr = 0.0001)
 
         print('Hidden units: {},  per-LSTM units: {}'.format(
             hidden_units,
@@ -575,32 +346,16 @@ class Network:
                         example['t'],
                     )
 
-                    #indices,targets = [],[]
                     for (left, right), correct in example['struct_data'].items():
                         scores = network.evaluate_struct(embeddings, left, right)
                         target = autograd.Variable(torch.LongTensor([correct]))
                         if network.GPU is not None:
                             target = target.cuda(network.GPU)
-
-                        #print(scores)
-                        #print(target)
                         loss = f_loss(scores, target)
                         errors.append(loss)
-
-                        """
-                        indices.append((left,right))
-                        targets.append(correct)
-                    scores = network.struct(embeddings, indices)
-                    targets = autograd.Variable(torch.LongTensor(targets))
-                    if network.GPU is not None:
-                        targets = targets.cuda(network.GPU)
-                    loss = f_loss(scores, targets)
-                    errors.append(loss)
-                        """
                     total_states += len(example['struct_data'])
 
 
-                    #indices,targets = [],[]
                     for (left, right), correct in example['label_data'].items():
                         scores = network.evaluate_label(embeddings, left, right)
                         target = autograd.Variable(torch.LongTensor([correct]))
@@ -609,27 +364,8 @@ class Network:
 
                         loss = f_loss(scores, target)
                         errors.append(loss)
-                        
-                        """
-                        indices.append((left,right))
-                        targets.append(correct)
-                    scores = network.label(embeddings, indices)
-                    targets = autograd.Variable(torch.LongTensor(targets))
-                    if network.GPU is not None:
-                        targets = targets.cuda(network.GPU)
-                    loss = f_loss(scores, targets)
-                    errors.append(loss)
-                        """
-
                     total_states += len(example['label_data'])
 
-
-                """
-                label_loss = torch.sum(torch.cat(label_errors))
-                label_optimizer.zero_grad()
-                label_loss.backward()
-                label_optimizer.step()
-                """
 
                 batch_loss = torch.sum(torch.cat(errors))
                 network.trainer.zero_grad()
@@ -637,10 +373,7 @@ class Network:
                 network.trainer.step()
 
                 
-
-
                 total_cost += batch_loss.data[0]
-                #total_cost += struct_loss.data[0] # + label_loss.data[0]
                 mean_cost = (total_cost / total_states)
                 
                 print(

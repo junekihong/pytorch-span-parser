@@ -262,11 +262,6 @@ class Parser(object):
         Only data from this parse, including mandatory S-actions.
             Follow softmax distribution for structural data.
         """
-
-        # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
-        #dynet.renew_cg()
-        #network.lstm.init_hidden()
-
         struct_data = {}
         label_data = {}
 
@@ -282,9 +277,6 @@ class Parser(object):
         if network.GPU is not None:
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
-        #embeddings = network.lstm(w, t, test=True)
-
-
 
         embeddings = network.evaluate_recurrent(w, t, test=True)
 
@@ -314,8 +306,6 @@ class Parser(object):
                     scores = network.evaluate_struct(embeddings, left, right)
                     probs = torch.nn.functional.softmax(scores).cpu().data.numpy()[0]
 
-                    
-
                     r = np.random.random()
 
                     if r <= probs[0]:
@@ -336,13 +326,6 @@ class Parser(object):
                 action = correct_action
             else:
                 left, right = features
-                """
-                scores = network.label(
-                    embeddings,
-                    ((left, right),),
-                    test=True,
-                )
-                """
                 scores = network.evaluate_label(embeddings, left, right)
                 scores = scores.cpu().data.numpy()[0]
 
@@ -370,13 +353,6 @@ class Parser(object):
 
     @staticmethod
     def parse(sentence, fm, network, tree):
-
-        # Placeholder dynet commands. Just in case I need to do something similar in pytorch?
-        #dynet.renew_cg()
-        #network.prep_params()
-        #network.lstm.init_hidden()
-
-
         n = len(sentence)
         state = Parser(n)
 
@@ -388,8 +364,6 @@ class Parser(object):
         if network.GPU is not None:
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
-        #embeddings = network.lstm(w, t, test=True)
-
 
         embeddings = network.evaluate_recurrent(w, t, test=True)
 
@@ -400,13 +374,6 @@ class Parser(object):
                 action = 'comb'
             else:
                 left, right = state.s_features()
-                """
-                scores = network.struct(
-                    embeddings,
-                    ((left,right),),
-                    test=True,
-                )
-                """
                 scores = network.evaluate_struct(embeddings, left, right, test=True)
                 scores = scores.cpu().data.numpy()[0]
                 action_index = np.argmax(scores)
@@ -414,14 +381,6 @@ class Parser(object):
             state.take_action(action)
 
             left, right = state.l_features()
-            
-            """
-            scores = network.label(
-                embeddings,
-                ((left,right),),
-                test=True,
-            )#.cpu().data.numpy()[0]
-            """
             scores = network.evaluate_label(embeddings, left, right, test=True)
             scores = scores.cpu().data.numpy()[0]
             if step < (2 * n - 2):
@@ -447,15 +406,11 @@ class Parser(object):
         network.label.eval()
         network.lstm.eval()
 
-        #f = open("temp.trees", "w")
         accuracy = FScore()
         for tree in trees:
             predicted = Parser.parse(tree.sentence, fm, network,  tree)
             local_accuracy = predicted.compare(tree)
             accuracy += local_accuracy
-            
-            #f.write(str(predicted) + "\n")
-        #f.close()
         return accuracy
 
 
