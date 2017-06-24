@@ -276,13 +276,17 @@ class Parser(object):
         n = len(sentence)
         state = Parser(n)
 
+
         w = autograd.Variable(torch.LongTensor([int(x) for x in data['w']]))
         t = autograd.Variable(torch.LongTensor([int(x) for x in data['t']]))
         if network.GPU is not None:
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
+        #embeddings = network.lstm(w, t, test=True)
 
-        embeddings = network.lstm(w, t, test=True)
+
+
+        embeddings = network.evaluate_recurrent(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -300,13 +304,17 @@ class Parser(object):
                     action = correct_action
                 else:
                     left, right = features
+                    """
                     scores = network.struct(
                         embeddings,
                         ((left,right),),
                         test=True,
                     )
-
+                    """
+                    scores = network.evaluate_struct(embeddings, left, right)
                     probs = torch.nn.functional.softmax(scores).cpu().data.numpy()[0]
+
+                    
 
                     r = np.random.random()
 
@@ -323,19 +331,19 @@ class Parser(object):
             label_data[features] = fm.l_action_index(correct_action)
 
 
-            # Temporary: Only train struct actions. Use the oracle for label actions.
-            #state.take_action(correct_action)
-
             r = np.random.random()            
             if r < beta:
                 action = correct_action
             else:
                 left, right = features
+                """
                 scores = network.label(
                     embeddings,
                     ((left, right),),
                     test=True,
                 )
+                """
+                scores = network.evaluate_label(embeddings, left, right)
                 scores = scores.cpu().data.numpy()[0]
 
                 if step < (2 * n - 2):
@@ -374,13 +382,16 @@ class Parser(object):
 
         w, t = fm.sentence_sequences(sentence)
 
+
         w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
         t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
         if network.GPU is not None:
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
+        #embeddings = network.lstm(w, t, test=True)
 
-        embeddings = network.lstm(w, t, test=True)
+
+        embeddings = network.evaluate_recurrent(w, t, test=True)
 
         for step in xrange(2 * n - 1):
             if not state.can_combine():
@@ -389,26 +400,29 @@ class Parser(object):
                 action = 'comb'
             else:
                 left, right = state.s_features()
+                """
                 scores = network.struct(
                     embeddings,
                     ((left,right),),
                     test=True,
                 )
+                """
+                scores = network.evaluate_struct(embeddings, left, right, test=True)
                 scores = scores.cpu().data.numpy()[0]
                 action_index = np.argmax(scores)
                 action = fm.s_action(action_index)
             state.take_action(action)
 
-            # Temporary: Only do struct actions. Use oracle for label actions.
-            #correct_label_action = state.l_oracle(tree)
-            #state.take_action(correct_label_action)
-
             left, right = state.l_features()
+            
+            """
             scores = network.label(
                 embeddings,
                 ((left,right),),
                 test=True,
             )#.cpu().data.numpy()[0]
+            """
+            scores = network.evaluate_label(embeddings, left, right, test=True)
             scores = scores.cpu().data.numpy()[0]
             if step < (2 * n - 2):
                 action_index = np.argmax(scores)
