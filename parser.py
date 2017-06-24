@@ -296,13 +296,6 @@ class Parser(object):
                     action = correct_action
                 else:
                     left, right = features
-                    """
-                    scores = network.struct(
-                        embeddings,
-                        ((left,right),),
-                        test=True,
-                    )
-                    """
                     scores = network.evaluate_struct(embeddings, left, right)
                     probs = torch.nn.functional.softmax(scores).cpu().data.numpy()[0]
 
@@ -402,10 +395,6 @@ class Parser(object):
 
     @staticmethod
     def evaluate_corpus(trees, fm, network):
-        network.struct.eval()
-        network.label.eval()
-        network.lstm.eval()
-
         accuracy = FScore()
         for tree in trees:
             predicted = Parser.parse(tree.sentence, fm, network,  tree)

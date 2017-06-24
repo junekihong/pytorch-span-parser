@@ -211,12 +211,6 @@ class Network:
             label_out=label_out,
             GPU=GPU,
         )
-        """
-        network.struct.load_state_dict(checkpoint["struct_state_dict"])
-        network.label.load_state_dict(checkpoint["label_state_dict"])
-        network.lstm.load_state_dict(checkpoint["lstm_state_dict"])
-        """
-
         network.word_embed.load_state_dict(checkpoint["word_embed_state_dict"])
         network.tag_embed.load_state_dict(checkpoint["tag_embed_state_dict"])
         network.lstm1.load_state_dict(checkpoint["lstm1_state_dict"])
