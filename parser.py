@@ -296,7 +296,8 @@ class Parser(object):
                     action = correct_action
                 else:
                     left, right = features
-                    scores = network.evaluate_struct(embeddings, left, right)
+                    scores = network.evaluate_struct(embeddings, ((left,right),))
+
                     probs = torch.nn.functional.softmax(scores).cpu().data.numpy()[0]
 
                     r = np.random.random()
@@ -319,7 +320,7 @@ class Parser(object):
                 action = correct_action
             else:
                 left, right = features
-                scores = network.evaluate_label(embeddings, left, right)
+                scores = network.evaluate_label(embeddings, ((left, right),))
                 scores = scores.cpu().data.numpy()[0]
 
                 if step < (2 * n - 2):
@@ -351,7 +352,6 @@ class Parser(object):
 
         w, t = fm.sentence_sequences(sentence)
 
-
         w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
         t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
         if network.GPU is not None:
@@ -367,14 +367,14 @@ class Parser(object):
                 action = 'comb'
             else:
                 left, right = state.s_features()
-                scores = network.evaluate_struct(embeddings, left, right, test=True)
+                scores = network.evaluate_struct(embeddings, ((left, right),), test=True)
                 scores = scores.cpu().data.numpy()[0]
                 action_index = np.argmax(scores)
                 action = fm.s_action(action_index)
             state.take_action(action)
 
             left, right = state.l_features()
-            scores = network.evaluate_label(embeddings, left, right, test=True)
+            scores = network.evaluate_label(embeddings, ((left, right),), test=True)
             scores = scores.cpu().data.numpy()[0]
             if step < (2 * n - 2):
                 action_index = np.argmax(scores)
@@ -395,6 +395,7 @@ class Parser(object):
 
     @staticmethod
     def evaluate_corpus(trees, fm, network):
+        network.init_hidden()
         accuracy = FScore()
         for tree in trees:
             predicted = Parser.parse(tree.sentence, fm, network,  tree)

@@ -126,31 +126,39 @@ class Network:
         return torch.cat([lstm_out1, lstm_out2], 2)
 
 
-    def evaluate_struct(self, outputs, lefts, rights, test=False):
-        span_out = []
-        for left_index, right_index in zip(lefts, rights):
-            span_out.append(outputs[right_index] - outputs[left_index - 1])
-        span_vec = torch.cat(span_out, 1)
-        
-        hidden_input = span_vec
+    def evaluate_struct(self, outputs, indices, test=False):
+        scores = []
+        span_vecs = []
+        for lefts, rights in indices:
+            span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                span_out.append(outputs[right_index] - outputs[left_index - 1])
+            span_vec = torch.cat(span_out, 1)
+            span_vecs.append(span_vec)
+
+        hidden_input = torch.cat(span_vecs)
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
-            
+        
         hidden_output = self.activation(self.struct_hidden_W(hidden_input))
         scores = self.struct_output_W(hidden_output)
         return scores
 
 
-    def evaluate_label(self, outputs, lefts, rights, test=False):
-        span_out = []
-        for left_index, right_index in zip(lefts, rights):
-            span_out.append(outputs[right_index] - outputs[left_index - 1])
-        span_vec = torch.cat(span_out, 1)
+    def evaluate_label(self, outputs, indices, test=False):
+        scores = []
+        span_vecs = []
+        for lefts, rights in indices:
+            span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                span_out.append(outputs[right_index] - outputs[left_index - 1])
+            span_vec = torch.cat(span_out, 1)
+            span_vecs.append(span_vec)
 
-        hidden_input = span_vec
+        hidden_input = torch.cat(span_vecs)
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
-
+        
         hidden_output = self.activation(self.label_hidden_W(hidden_input))
         scores = self.label_output_W(hidden_output)
         return scores
@@ -261,7 +269,7 @@ class Network:
             GPU=GPU,
         )
         
-        f_loss = nn.CrossEntropyLoss()
+        f_loss = nn.CrossEntropyLoss(size_average=False)
         if GPU is not None:
             f_loss = f_loss.cuda(GPU)
         random.seed(1)
@@ -292,7 +300,6 @@ class Network:
         print('Loaded {} validation trees!'.format(len(dev_trees)))
 
         best_acc = FScore()
-        #network.lstm.init_hidden()
         network.init_hidden()
         
         for epoch in xrange(1, epochs + 1):
@@ -334,38 +341,45 @@ class Network:
                         if r < drop_prob:
                             example['w'][i] = 0
 
-                    #embeddings = network.lstm(
                     embeddings = network.evaluate_recurrent(
                         example['w'],
                         example['t'],
                     )
 
+                    indices,targets = [], []
                     for (left, right), correct in example['struct_data'].items():
-                        scores = network.evaluate_struct(embeddings, left, right)
-                        target = autograd.Variable(torch.LongTensor([correct]))
-                        if network.GPU is not None:
-                            target = target.cuda(network.GPU)
-                        loss = f_loss(scores, target)
+                        indices.append((left,right))
+                        targets.append(correct)
+                    targets = autograd.Variable(torch.LongTensor(targets))
+                    if network.GPU is not None:
+                        targets = targets.cuda(network.GPU)
+                    scores = network.evaluate_struct(embeddings, indices)
+                    for i in xrange(len(targets)):
+                        score = scores[i]
+                        target = targets[i]
+                        loss = f_loss(score,target)
                         errors.append(loss)
                     total_states += len(example['struct_data'])
 
-
+                    indices,targets = [], []
                     for (left, right), correct in example['label_data'].items():
-                        scores = network.evaluate_label(embeddings, left, right)
-                        target = autograd.Variable(torch.LongTensor([correct]))
-                        if network.GPU is not None:
-                            target = target.cuda(network.GPU)
-
-                        loss = f_loss(scores, target)
+                        indices.append((left,right))
+                        targets.append(correct)
+                    targets = autograd.Variable(torch.LongTensor(targets))
+                    if network.GPU is not None:
+                        targets = targets.cuda(network.GPU)
+                    scores = network.evaluate_label(embeddings, indices)
+                    for i in xrange(len(targets)):
+                        score = scores[i]
+                        target = targets[i]
+                        loss = f_loss(score,target)
                         errors.append(loss)
                     total_states += len(example['label_data'])
-
 
                 batch_loss = torch.sum(torch.cat(errors))
                 network.trainer.zero_grad()
                 batch_loss.backward()
                 network.trainer.step()
-
                 
                 total_cost += batch_loss.data[0]
                 mean_cost = (total_cost / total_states)
