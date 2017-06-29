@@ -118,25 +118,36 @@ class Network:
         sentence = sentence.view(sentence.size(0), 1, sentence.size(1))
         
         lstm_out1, hidden1 = self.lstm1(sentence, self.hidden)
-        
+        fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
+
         if self.droprate > 0 and not test:
             lstm_out1 = self.drop(lstm_out1)
 
         lstm_out2, hidden2 = self.lstm2(lstm_out1, hidden1)
-        return torch.cat([lstm_out1, lstm_out2], 2)
+        fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
+        
+        fwd = torch.cat([fwd1, fwd2], 2)
+        back = torch.cat([back1, back2],2)
+        #return torch.cat([lstm_out1, lstm_out2], 2)
+        return fwd, back
 
 
-    def evaluate_struct(self, outputs, indices, test=False):
+    def evaluate_struct(self, fwd_out, back_out, indices, test=False):
         scores = []
         span_vecs = []
-        for lefts, rights in indices:
-            span_out = []
-            for left_index, right_index in zip(lefts, rights):
-                span_out.append(outputs[right_index] - outputs[left_index - 1])
-            span_vec = torch.cat(span_out, 1)
-            span_vecs.append(span_vec)
 
+        for lefts, rights in indices:
+            fwd_span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
+            fwd_span_vec = torch.cat(fwd_span_out, 1)
+            back_span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
+            back_span_vec = torch.cat(back_span_out, 1)
+            span_vecs.append(torch.cat([fwd_span_vec, back_span_vec], 1))
         hidden_input = torch.cat(span_vecs)
+
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
         
@@ -145,17 +156,22 @@ class Network:
         return scores
 
 
-    def evaluate_label(self, outputs, indices, test=False):
+    def evaluate_label(self, fwd_out, back_out, indices, test=False):
         scores = []
         span_vecs = []
-        for lefts, rights in indices:
-            span_out = []
-            for left_index, right_index in zip(lefts, rights):
-                span_out.append(outputs[right_index] - outputs[left_index - 1])
-            span_vec = torch.cat(span_out, 1)
-            span_vecs.append(span_vec)
 
+        for lefts, rights in indices:
+            fwd_span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
+            fwd_span_vec = torch.cat(fwd_span_out, 1)
+            back_span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
+            back_span_vec = torch.cat(back_span_out, 1)
+            span_vecs.append(torch.cat([fwd_span_vec, back_span_vec], 1))
         hidden_input = torch.cat(span_vecs)
+
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
         
@@ -341,7 +357,7 @@ class Network:
                         if r < drop_prob:
                             example['w'][i] = 0
 
-                    embeddings = network.evaluate_recurrent(
+                    fwd, back = network.evaluate_recurrent(
                         example['w'],
                         example['t'],
                     )
@@ -353,7 +369,7 @@ class Network:
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)
-                    scores = network.evaluate_struct(embeddings, indices)
+                    scores = network.evaluate_struct(fwd, back, indices)
                     for i in xrange(len(targets)):
                         score = scores[i]
                         target = targets[i]
@@ -368,7 +384,7 @@ class Network:
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)
-                    scores = network.evaluate_label(embeddings, indices)
+                    scores = network.evaluate_label(fwd, back, indices)
                     for i in xrange(len(targets)):
                         score = scores[i]
                         target = targets[i]

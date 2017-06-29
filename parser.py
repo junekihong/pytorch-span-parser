@@ -278,7 +278,7 @@ class Parser(object):
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
-        embeddings = network.evaluate_recurrent(w, t, test=True)
+        fwd, back = network.evaluate_recurrent(w, t, test=True)
 
         for step in xrange(2 * n - 1):
 
@@ -296,7 +296,7 @@ class Parser(object):
                     action = correct_action
                 else:
                     left, right = features
-                    scores = network.evaluate_struct(embeddings, ((left,right),))
+                    scores = network.evaluate_struct(fwd, back, ((left,right),))
 
                     probs = torch.nn.functional.softmax(scores).cpu().data.numpy()[0]
 
@@ -320,7 +320,7 @@ class Parser(object):
                 action = correct_action
             else:
                 left, right = features
-                scores = network.evaluate_label(embeddings, ((left, right),))
+                scores = network.evaluate_label(fwd, back, ((left, right),))
                 scores = scores.cpu().data.numpy()[0]
 
                 if step < (2 * n - 2):
@@ -358,7 +358,7 @@ class Parser(object):
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
-        embeddings = network.evaluate_recurrent(w, t, test=True)
+        fwd, back = network.evaluate_recurrent(w, t, test=True)
 
         for step in xrange(2 * n - 1):
             if not state.can_combine():
@@ -367,14 +367,14 @@ class Parser(object):
                 action = 'comb'
             else:
                 left, right = state.s_features()
-                scores = network.evaluate_struct(embeddings, ((left, right),), test=True)
+                scores = network.evaluate_struct(fwd, back, ((left, right),), test=True)
                 scores = scores.cpu().data.numpy()[0]
                 action_index = np.argmax(scores)
                 action = fm.s_action(action_index)
             state.take_action(action)
 
             left, right = state.l_features()
-            scores = network.evaluate_label(embeddings, ((left, right),), test=True)
+            scores = network.evaluate_label(fwd, back, ((left, right),), test=True)
             scores = scores.cpu().data.numpy()[0]
             if step < (2 * n - 2):
                 action_index = np.argmax(scores)
