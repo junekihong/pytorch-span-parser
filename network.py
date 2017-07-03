@@ -20,7 +20,6 @@ import torch.optim as optim
 from phrase_tree import PhraseTree, FScore
 from features import FeatureMapper
 from parser import Parser
-torch.manual_seed(1)
 from pprint import pprint
 
 
@@ -55,8 +54,8 @@ class Network:
         self.word_embed = nn.Embedding(word_count, word_dims)
         self.tag_embed = nn.Embedding(tag_count, tag_dims)
 
-        self.lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units, bidirectional=True)
-        self.lstm2 = nn.LSTM(2 * lstm_units, lstm_units, bidirectional=True)
+        self.lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units, dropout=droprate, bidirectional=True)
+        self.lstm2 = nn.LSTM(2 * lstm_units, lstm_units, dropout=droprate, bidirectional=True)
 
         self.struct_hidden_W = nn.Linear(4 * struct_spans * lstm_units, hidden_units)
         self.struct_output_W = nn.Linear(hidden_units, struct_out)
@@ -90,6 +89,28 @@ class Network:
         self.init_weights()
 
 
+    def evaluate_mode(self):
+        self.word_embed.eval()
+        self.tag_embed.eval()
+        self.lstm1.eval()
+        self.lstm2.eval()
+        self.struct_hidden_W.eval()
+        self.struct_output_W.eval()
+        self.label_hidden_W.eval()
+        self.label_output_W.eval()
+
+    
+    def train_mode(self):
+        self.word_embed.train()
+        self.tag_embed.train()
+        self.lstm1.train()
+        self.lstm2.train()
+        self.struct_hidden_W.train()
+        self.struct_output_W.train()
+        self.label_hidden_W.train()
+        self.label_output_W.train()
+
+
     def init_weights(self):
         initrange = 0.01
         self.word_embed.weight.data.uniform_(-initrange, initrange)
@@ -108,6 +129,11 @@ class Network:
         
 
     def evaluate_recurrent(self, word_inds, tag_inds, test=False):
+        if test:
+            self.evaluate_mode()
+        else:
+            self.train_mode()
+
         sentence = []
         for (w, t) in zip(word_inds, tag_inds):
             wordvec = self.word_embed(w)
@@ -133,6 +159,11 @@ class Network:
 
 
     def evaluate_struct(self, fwd_out, back_out, indices, test=False):
+        if test:
+            self.evaluate_mode()
+        else:
+            self.train_mode()
+
         scores = []
         span_vecs = []
 
@@ -157,6 +188,11 @@ class Network:
 
 
     def evaluate_label(self, fwd_out, back_out, indices, test=False):
+        if test:
+            self.evaluate_mode()
+        else:
+            self.train_mode()
+
         scores = []
         span_vecs = []
 
@@ -289,6 +325,7 @@ class Network:
         if GPU is not None:
             f_loss = f_loss.cuda(GPU)
         random.seed(1)
+        torch.manual_seed(1)
 
         print('Hidden units: {},  per-LSTM units: {}'.format(
             hidden_units,
