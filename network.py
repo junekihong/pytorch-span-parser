@@ -135,12 +135,19 @@ class Network:
             self.train_mode()
 
         sentence = []
+        wordvecs = self.word_embed(word_inds)
+        tagvecs = self.tag_embed(tag_inds)
+        sentence = torch.cat([wordvecs, tagvecs], 1)
+
+        """
         for (w, t) in zip(word_inds, tag_inds):
             wordvec = self.word_embed(w)
             tagvec = self.tag_embed(t)
             vec = torch.cat([wordvec,tagvec], 1)
             sentence.append(vec)
         sentence = torch.cat(sentence)
+        """
+
         sentence = sentence.view(sentence.size(0), 1, sentence.size(1))
         
         lstm_out1, hidden1 = self.lstm1(sentence, self.hidden)
