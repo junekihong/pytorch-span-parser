@@ -118,15 +118,23 @@ class Network:
 
 
     def init_hidden(self):
-        weight = next(self.lstm1.parameters()).data
         num_layers = 1
         batch_size = 1
-        hidden = (autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
-                  autograd.Variable(weight.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+
+        weight1 = next(self.lstm1.parameters()).data
+        hidden1 = (autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
+                   autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+
+        weight2 = next(self.lstm2.parameters()).data
+        hidden2 = (autograd.Variable(weight2.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
+                   autograd.Variable(weight2.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+
         if self.GPU is not None:
-            hidden = tuple((x.cuda(self.GPU) for x in hidden))
-        self.hidden = hidden
-        
+            hidden1 = tuple((x.cuda(self.GPU) for x in hidden1))
+            hidden2 = tuple((x.cuda(self.GPU) for x in hidden2))
+        self.hidden1 = hidden1
+        self.hidden2 = hidden2
+
 
     def evaluate_recurrent(self, word_inds, tag_inds, test=False):
         if test:
@@ -149,20 +157,24 @@ class Network:
         """
 
         sentence = sentence.view(sentence.size(0), 1, sentence.size(1))
-        
-        lstm_out1, hidden1 = self.lstm1(sentence, self.hidden)
-        fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
 
+        lstm_out1, hidden1 = self.lstm1(sentence, self.hidden1)
+        fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
         if self.droprate > 0 and not test:
             lstm_out1 = self.drop(lstm_out1)
 
-        lstm_out2, hidden2 = self.lstm2(lstm_out1, hidden1)
+        lstm_out2, hidden2 = self.lstm2(lstm_out1, self.hidden2)
         fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
         
         fwd = torch.cat([fwd1, fwd2], 2)
         back = torch.cat([back1, back2],2)
+
         #return torch.cat([lstm_out1, lstm_out2], 2)
         return fwd, back
+
+
+
+
 
 
     def evaluate_struct(self, fwd_out, back_out, indices, test=False):
@@ -247,9 +259,6 @@ class Network:
             "struct_out": self.struct_out,
             "label_out": self.label_out,
         }, filename)
-
-
-
 
 
     @staticmethod
