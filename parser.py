@@ -273,12 +273,17 @@ class Parser(object):
 
 
         w = autograd.Variable(torch.LongTensor([int(x) for x in data['w']]))
+        w = w.view(w.size(0), 1)
+
         t = autograd.Variable(torch.LongTensor([int(x) for x in data['t']]))
+        t = t.view(t.size(0), 1)
+
         if network.GPU is not None:
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
-        fwd, back = network.evaluate_recurrent(w, t, test=True)
+        fwds, backs = network.evaluate_recurrent(w, t, test=True)
+        fwd, back = fwds[:, 0, :], backs[:, 0, :]
 
         for step in xrange(2 * n - 1):
 
@@ -353,12 +358,17 @@ class Parser(object):
         w, t = fm.sentence_sequences(sentence)
 
         w = autograd.Variable(torch.LongTensor([int(x) for x in w]))
+        w = w.view(w.size(0), 1)
+
         t = autograd.Variable(torch.LongTensor([int(x) for x in t]))
+        t = t.view(t.size(0), 1)
+
         if network.GPU is not None:
             w = w.cuda(network.GPU)
             t = t.cuda(network.GPU)
 
-        fwd, back = network.evaluate_recurrent(w, t, test=True)
+        fwds, backs = network.evaluate_recurrent(w, t, test=True)
+        fwd, back = fwds[:, 0, :], backs[:, 0, :]
 
         for step in xrange(2 * n - 1):
             if not state.can_combine():
@@ -395,7 +405,6 @@ class Parser(object):
 
     @staticmethod
     def evaluate_corpus(trees, fm, network):
-        network.init_hidden()
         accuracy = FScore()
         for tree in trees:
             predicted = Parser.parse(tree.sentence, fm, network,  tree)

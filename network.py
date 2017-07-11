@@ -16,12 +16,15 @@ import torch.nn as nn
 import torch.autograd as autograd
 import torch.functional as F
 import torch.optim as optim
+#from torch.nn.utils.rnn import pad_packed_sequence
 
 from phrase_tree import PhraseTree, FScore
 from features import FeatureMapper
 from parser import Parser
 from pprint import pprint
 
+
+    
 
 class Network:
 
@@ -48,6 +51,7 @@ class Network:
         self.label_out = label_out
         self.droprate = droprate
         self.GPU = GPU
+        self.batch_size = 1
 
         self.drop = nn.Dropout(droprate)
         self.activation = nn.functional.relu
@@ -75,7 +79,6 @@ class Network:
             self.struct_output_W = self.struct_output_W.cuda(GPU)
             self.label_hidden_W = self.label_hidden_W.cuda(GPU)
             self.label_output_W = self.label_output_W.cuda(GPU)
-
 
         self.trainer = optim.Adadelta([x for x in self.word_embed.parameters()] +
                                       [x for x in self.tag_embed.parameters()] + 
@@ -117,23 +120,46 @@ class Network:
         self.tag_embed.weight.data.uniform_(-initrange, initrange)
 
 
-    def init_hidden(self):
+    def init_hidden(self, batch_size=1):
         num_layers = 1
-        batch_size = 1
 
         weight1 = next(self.lstm1.parameters()).data
-        hidden1 = (autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
-                   autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+        hidden1 = (autograd.Variable(weight1.new(num_layers * 2, 1, self.lstm_units).zero_()),
+                   autograd.Variable(weight1.new(num_layers * 2, 1, self.lstm_units).zero_()))
 
         weight2 = next(self.lstm2.parameters()).data
-        hidden2 = (autograd.Variable(weight2.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
-                   autograd.Variable(weight2.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+        hidden2 = (autograd.Variable(weight2.new(num_layers * 2, 1, self.lstm_units).zero_()),
+                   autograd.Variable(weight2.new(num_layers * 2, 1, self.lstm_units).zero_()))
 
+
+        hidden1_batch = (autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
+                         autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+
+        hidden2_batch = (autograd.Variable(weight2.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
+                         autograd.Variable(weight2.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+        
         if self.GPU is not None:
             hidden1 = tuple((x.cuda(self.GPU) for x in hidden1))
             hidden2 = tuple((x.cuda(self.GPU) for x in hidden2))
+            hidden1_batch = tuple((x.cuda(self.GPU) for x in hidden1_batch))
+            hidden2_batch = tuple((x.cuda(self.GPU) for x in hidden2_batch))
+
         self.hidden1 = hidden1
         self.hidden2 = hidden2
+        self.hidden1_batch = hidden1_batch
+        self.hidden2_batch = hidden2_batch
+
+
+    def pad(self, tensor, length):
+        if length - tensor.size(0) == 0:
+            return tensor.view(tensor.size(0), 1)
+        
+        padding = autograd.Variable(torch.LongTensor(length - tensor.size(0), *tensor.size()[1:]).zero_())
+        if self.GPU is not None:
+            padding = padding.cuda(self.GPU)
+        result = torch.cat([tensor, padding])
+        result = result.view(result.size(0), 1)
+        return result
 
 
     def evaluate_recurrent(self, word_inds, tag_inds, test=False):
@@ -145,7 +171,11 @@ class Network:
         sentence = []
         wordvecs = self.word_embed(word_inds)
         tagvecs = self.tag_embed(tag_inds)
-        sentence = torch.cat([wordvecs, tagvecs], 1)
+
+        #print(wordvecs.size())
+        #print(tagvecs.size())
+        sentence = torch.cat([wordvecs, tagvecs], 2)
+
 
         """
         for (w, t) in zip(word_inds, tag_inds):
@@ -156,22 +186,33 @@ class Network:
         sentence = torch.cat(sentence)
         """
 
-        sentence = sentence.view(sentence.size(0), 1, sentence.size(1))
-
-        lstm_out1, hidden1 = self.lstm1(sentence, self.hidden1)
-        fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
-        if self.droprate > 0 and not test:
-            lstm_out1 = self.drop(lstm_out1)
-
-        lstm_out2, hidden2 = self.lstm2(lstm_out1, self.hidden2)
-        fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
+        #sentence = sentence.view(sentence.size(0), 1, sentence.size(1))
         
-        fwd = torch.cat([fwd1, fwd2], 2)
-        back = torch.cat([back1, back2],2)
+        if sentence.size(1) == 1:
+            lstm_out1, hidden1 = self.lstm1(sentence, self.hidden1)
+            fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
+            if self.droprate > 0 and not test:
+                lstm_out1 = self.drop(lstm_out1)
 
-        #return torch.cat([lstm_out1, lstm_out2], 2)
+            lstm_out2, hidden2 = self.lstm2(lstm_out1, self.hidden2)
+            fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
+        
+            fwd = torch.cat([fwd1, fwd2], 2)
+            back = torch.cat([back1, back2],2)
+        else:
+            lstm_out1, hidden1 = self.lstm1(sentence, self.hidden1_batch)
+            fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
+            if self.droprate > 0 and not test:
+                lstm_out1 = self.drop(lstm_out1)
+
+            lstm_out2, hidden2 = self.lstm2(lstm_out1, self.hidden2_batch)
+            fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
+        
+            fwd = torch.cat([fwd1, fwd2], 2)
+            back = torch.cat([back1, back2],2)
+
+        #return torch.cat([lstm_out1, lstm_out2], 2)            
         return fwd, back
-
 
 
 
@@ -186,17 +227,22 @@ class Network:
         scores = []
         span_vecs = []
 
+
         for lefts, rights in indices:
             fwd_span_out = []
             for left_index, right_index in zip(lefts, rights):
                 fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
-            fwd_span_vec = torch.cat(fwd_span_out, 1)
+            fwd_span_vec = torch.cat(fwd_span_out)
             back_span_out = []
             for left_index, right_index in zip(lefts, rights):
                 back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-            back_span_vec = torch.cat(back_span_out, 1)
-            span_vecs.append(torch.cat([fwd_span_vec, back_span_vec], 1))
+            back_span_vec = torch.cat(back_span_out)
+            
+            vec = torch.cat([fwd_span_vec, back_span_vec])
+            span_vecs.append(vec.view(1, vec.size(0)))
+            #span_vecs.append(torch.cat([fwd_span_vec, back_span_vec]))
         hidden_input = torch.cat(span_vecs)
+        #hidden_input = hidden_input.view(1, hidden_input.size(0))
 
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
@@ -219,13 +265,17 @@ class Network:
             fwd_span_out = []
             for left_index, right_index in zip(lefts, rights):
                 fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
-            fwd_span_vec = torch.cat(fwd_span_out, 1)
+            fwd_span_vec = torch.cat(fwd_span_out)
             back_span_out = []
             for left_index, right_index in zip(lefts, rights):
                 back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-            back_span_vec = torch.cat(back_span_out, 1)
-            span_vecs.append(torch.cat([fwd_span_vec, back_span_vec], 1))
+            back_span_vec = torch.cat(back_span_out)
+
+            vec = torch.cat([fwd_span_vec, back_span_vec])
+            span_vecs.append(vec.view(1, vec.size(0)))
+
         hidden_input = torch.cat(span_vecs)
+        #hidden_input = hidden_input.view(1, hidden_input.size(0))
 
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
@@ -295,6 +345,7 @@ class Network:
         network.struct_output_W.load_state_dict(checkpoint["struct_output_W_state_dict"])
         network.label_hidden_W.load_state_dict(checkpoint["label_hidden_W_state_dict"])
         network.label_output_W.load_state_dict(checkpoint["label_output_W_state_dict"])
+        network.init_hidden()
 
         return network
 
@@ -369,7 +420,7 @@ class Network:
         print('Loaded {} validation trees!'.format(len(dev_trees)))
 
         best_acc = FScore()
-        network.init_hidden()
+        network.init_hidden(batch_size)
         
         for epoch in xrange(1, epochs + 1):
             print('........... epoch {} ...........'.format(epoch))
@@ -398,6 +449,7 @@ class Network:
                 batch = [example for (example, _) in explore]
                 errors = []
 
+                sorted_batch = []
                 for example in batch:
 
                     ## random UNKing ##
@@ -410,10 +462,27 @@ class Network:
                         if r < drop_prob:
                             example['w'][i] = 0
 
+                    """
                     fwd, back = network.evaluate_recurrent(
                         example['w'],
                         example['t'],
                     )
+                    """
+                    #w_batch.append(example['w'])
+                    #t_batch.append(example['t'])
+
+                    sorted_batch.append((example['w'], example['t'], example))
+                    
+                sorted_batch = sorted(sorted_batch, key=lambda x:x[0].size(0), reverse=True)
+                max_length = sorted_batch[0][0].size(0)
+                padded_w = torch.cat([network.pad(w, max_length) for w,_,_ in sorted_batch], 1)
+                padded_t = torch.cat([network.pad(t, max_length) for _,t,_ in sorted_batch], 1)
+
+                fwds,backs = network.evaluate_recurrent(padded_w, padded_t)
+                
+                for batch_index, (w, t, example) in enumerate(sorted_batch):
+                    fwd = fwds[:, batch_index, :]
+                    back = backs[:, batch_index, :]
 
                     indices,targets = [], []
                     for (left, right), correct in example['struct_data'].items():
