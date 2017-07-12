@@ -58,8 +58,8 @@ class Network:
         self.word_embed = nn.Embedding(word_count, word_dims)
         self.tag_embed = nn.Embedding(tag_count, tag_dims)
 
-        self.lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units, dropout=droprate, bidirectional=True)
-        self.lstm2 = nn.LSTM(2 * lstm_units, lstm_units, dropout=droprate, bidirectional=True)
+        self.lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units, bidirectional=True)
+        self.lstm2 = nn.LSTM(2 * lstm_units, lstm_units, bidirectional=True)
 
         self.struct_hidden_W = nn.Linear(4 * struct_spans * lstm_units, hidden_units)
         self.struct_output_W = nn.Linear(hidden_units, struct_out)
