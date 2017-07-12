@@ -86,8 +86,10 @@ class Network:
                      [x for x in self.label_hidden_W.parameters()] + \
                      [x for x in self.label_output_W.parameters()]
                                       
-        #self.trainer = optim.Adadelta(parameters, rho=0.99, eps=1e-7, weight_decay=1e-5)
         self.trainer = optim.Adadelta(parameters, rho=0.99, eps=1e-7, weight_decay=1e-5)
+        #self.trainer = optim.Adadelta(parameters)
+        #self.trainer = optim.Adam(parameters)
+        #self.trainer = optim.Adagrad(parameters)
         self.init_weights()
 
 
