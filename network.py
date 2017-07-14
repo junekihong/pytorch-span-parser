@@ -121,6 +121,7 @@ class Network:
 
 
     def init_hidden(self, batch_size=1):
+        self.batch_size = batch_size
         num_layers = 1
 
         weight1 = next(self.lstm1.parameters()).data
@@ -171,51 +172,31 @@ class Network:
         sentence = []
         wordvecs = self.word_embed(word_inds)
         tagvecs = self.tag_embed(tag_inds)
-
-        #print(wordvecs.size())
-        #print(tagvecs.size())
         sentence = torch.cat([wordvecs, tagvecs], 2)
 
+        hidden1 = self.hidden1
+        hidden2 = self.hidden2
+        if sentence.size(1) > 1:
+            if sentence.size(1) == self.batch_size:
+                hidden1 = self.hidden1_batch
+                hidden2 = self.hidden2_batch
+            else:
+                weight1 = next(self.lstm1.parameters()).data
+                hidden1 = (autograd.Variable(weight1.new(2, sentence.size(1), self.lstm_units).zero_()),
+                           autograd.Variable(weight1.new(2, sentence.size(1), self.lstm_units).zero_()))
+                weight2 = next(self.lstm2.parameters()).data
+                hidden2 = (autograd.Variable(weight2.new(2, sentence.size(1), self.lstm_units).zero_()),
+                           autograd.Variable(weight2.new(2, sentence.size(1), self.lstm_units).zero_()))
 
-        """
-        for (w, t) in zip(word_inds, tag_inds):
-            wordvec = self.word_embed(w)
-            tagvec = self.tag_embed(t)
-            vec = torch.cat([wordvec,tagvec], 1)
-            sentence.append(vec)
-        sentence = torch.cat(sentence)
-        """
-
-        #sentence = sentence.view(sentence.size(0), 1, sentence.size(1))
-        
-        if sentence.size(1) == 1:
-            lstm_out1, hidden1 = self.lstm1(sentence, self.hidden1)
-            fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
-            if self.droprate > 0 and not test:
-                lstm_out1 = self.drop(lstm_out1)
-
-            lstm_out2, hidden2 = self.lstm2(lstm_out1, self.hidden2)
-            fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
-        
-            fwd = torch.cat([fwd1, fwd2], 2)
-            back = torch.cat([back1, back2],2)
-        else:
-            lstm_out1, hidden1 = self.lstm1(sentence, self.hidden1_batch)
-            fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
-            if self.droprate > 0 and not test:
-                lstm_out1 = self.drop(lstm_out1)
-
-            lstm_out2, hidden2 = self.lstm2(lstm_out1, self.hidden2_batch)
-            fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
-        
-            fwd = torch.cat([fwd1, fwd2], 2)
-            back = torch.cat([back1, back2],2)
-
-        #return torch.cat([lstm_out1, lstm_out2], 2)            
+        lstm_out1, hidden1 = self.lstm1(sentence, hidden1)
+        fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
+        if self.droprate > 0 and not test:
+            lstm_out1 = self.drop(lstm_out1)
+        lstm_out2, hidden2 = self.lstm2(lstm_out1, hidden2)
+        fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
+        fwd = torch.cat([fwd1, fwd2], 2)
+        back = torch.cat([back1, back2],2)
         return fwd, back
-
-
-
 
 
     def evaluate_struct(self, fwd_out, back_out, indices, test=False):
@@ -226,8 +207,6 @@ class Network:
 
         scores = []
         span_vecs = []
-
-
         for lefts, rights in indices:
             fwd_span_out = []
             for left_index, right_index in zip(lefts, rights):
@@ -240,13 +219,9 @@ class Network:
             
             vec = torch.cat([fwd_span_vec, back_span_vec])
             span_vecs.append(vec.view(1, vec.size(0)))
-            #span_vecs.append(torch.cat([fwd_span_vec, back_span_vec]))
         hidden_input = torch.cat(span_vecs)
-        #hidden_input = hidden_input.view(1, hidden_input.size(0))
-
         if self.droprate > 0 and not test:
             hidden_input = self.drop(hidden_input)
-        
         hidden_output = self.activation(self.struct_hidden_W(hidden_input))
         scores = self.struct_output_W(hidden_output)
         return scores
