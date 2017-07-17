@@ -23,6 +23,8 @@ from parser import Parser
 from pprint import pprint
 
 
+
+
 class Network:
 
     def __init__(
@@ -146,20 +148,9 @@ class Network:
         else:
             self.train_mode()
 
-        sentence = []
         wordvecs = self.word_embed(word_inds)
         tagvecs = self.tag_embed(tag_inds)
         sentence = torch.cat([wordvecs, tagvecs], 1)
-
-        """
-        for (w, t) in zip(word_inds, tag_inds):
-            wordvec = self.word_embed(w)
-            tagvec = self.tag_embed(t)
-            vec = torch.cat([wordvec,tagvec], 1)
-            sentence.append(vec)
-        sentence = torch.cat(sentence)
-        """
-
         sentence = sentence.view(sentence.size(0), 1, sentence.size(1))
 
         lstm_out1, hidden1 = self.lstm1(sentence, self.hidden1)
@@ -171,14 +162,8 @@ class Network:
         fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
         
         fwd = torch.cat([fwd1, fwd2], 2)
-        back = torch.cat([back1, back2],2)
-
-        #return torch.cat([lstm_out1, lstm_out2], 2)
+        back = torch.cat([back1, back2], 2)
         return fwd, back
-
-
-
-
 
 
     def evaluate_struct(self, fwd_out, back_out, indices, test=False):
@@ -197,7 +182,11 @@ class Network:
             fwd_span_vec = torch.cat(fwd_span_out, 1)
             back_span_out = []
             for left_index, right_index in zip(lefts, rights):
-                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
+                if left_index == right_index + 1:
+                    back_span_out.append(back_out[0] - back_out[0])
+                else:
+                    back_span_out.append(back_out[left_index] - back_out[right_index + 1])
+
             back_span_vec = torch.cat(back_span_out, 1)
             span_vecs.append(torch.cat([fwd_span_vec, back_span_vec], 1))
         hidden_input = torch.cat(span_vecs)
@@ -218,7 +207,7 @@ class Network:
 
         scores = []
         span_vecs = []
-
+        
         for lefts, rights in indices:
             fwd_span_out = []
             for left_index, right_index in zip(lefts, rights):
@@ -226,7 +215,11 @@ class Network:
             fwd_span_vec = torch.cat(fwd_span_out, 1)
             back_span_out = []
             for left_index, right_index in zip(lefts, rights):
-                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
+                if left_index == right_index + 1:
+                    back_span_out.append(back_out[0] - back_out[0])
+                else:
+                    back_span_out.append(back_out[left_index] - back_out[right_index + 1])
+
             back_span_vec = torch.cat(back_span_out, 1)
             span_vecs.append(torch.cat([fwd_span_vec, back_span_vec], 1))
         hidden_input = torch.cat(span_vecs)
@@ -385,6 +378,7 @@ class Network:
             np.random.shuffle(training_data)
 
             for b in xrange(num_batches):
+                network.trainer.zero_grad()
                 batch = training_data[(b * batch_size) : ((b + 1) * batch_size)]
                 
                 explore = [
@@ -450,7 +444,7 @@ class Network:
                     total_states += len(example['label_data'])
 
                 batch_loss = torch.sum(torch.cat(errors))
-                network.trainer.zero_grad()
+                #network.trainer.zero_grad()
                 batch_loss.backward()
                 network.trainer.step()
                 
