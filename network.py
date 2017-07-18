@@ -24,6 +24,142 @@ from parser import Parser
 from pprint import pprint
 
 
+
+class Action(nn.Module):
+    def __init__(self, spans, lstm_units, hidden_units, out, droprate, GPU=None):
+        super(Action, self).__init__()
+        self.spans = spans
+        self.lstm_units = lstm_units
+        self.hidden_units = hidden_units
+        self.out = out
+        self.droprate = droprate
+
+        self.drop = nn.Dropout(droprate)
+        self.activation = nn.functional.relu
+        self.hidden_W = nn.Linear(4 * spans * lstm_units, hidden_units)
+        self.output_W = nn.Linear(hidden_units, out)
+
+        if GPU is not None:
+            self.drop = self.drop.cuda(GPU)
+            self.hidden_W = self.hidden_W.cuda(GPU)
+            self.output_W = self.output_W.cuda(GPU)
+
+    def forward(self, fwd_out, back_out, indices, test=False):
+        if test:
+            self.eval()
+        else:
+            self.train()
+
+        scores = []
+        span_vecs = []
+        for lefts, rights in indices:
+            fwd_span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
+            fwd_span_vec = torch.cat(fwd_span_out)
+            back_span_out = []
+            for left_index, right_index in zip(lefts, rights):
+                if left_index == right_index + 1:
+                    back_span_out.append(back_out[0] - back_out[0])
+                else:
+                    back_span_out.append(back_out[left_index] - back_out[right_index + 1])
+
+            back_span_vec = torch.cat(back_span_out)
+            
+            vec = torch.cat([fwd_span_vec, back_span_vec])
+            span_vecs.append(vec.view(1, vec.size(0)))
+        hidden_input = torch.cat(span_vecs)
+        if self.droprate > 0 and not test:
+            hidden_input = self.drop(hidden_input)
+        hidden_output = self.activation(self.hidden_W(hidden_input))
+        scores = self.output_W(hidden_output)
+        return scores
+
+
+class LSTM(nn.Module):
+    def __init__(self, word_dims, tag_dims, lstm_units, droprate, GPU=None):
+        super(LSTM, self).__init__()
+
+        self.word_dims = word_dims
+        self.tag_dims = tag_dims
+        self.lstm_units = lstm_units
+        self.droprate = droprate
+        self.GPU = GPU
+
+        self.lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units, bidirectional=True)
+        self.lstm2 = nn.LSTM(2 * lstm_units, lstm_units, bidirectional=True)
+        self.drop = nn.Dropout(droprate)
+
+        if GPU is not None:
+            self.lstm1 = self.lstm1.cuda(GPU)
+            self.lstm2 = self.lstm2.cuda(GPU)
+        
+    def forward(self, word_inds, tag_inds, word_embed, tag_embed, test=False):
+        if test:
+            self.eval()
+        else:
+            self.train()
+
+        sentence = []
+        wordvecs = word_embed(word_inds)
+        tagvecs = tag_embed(tag_inds)
+        sentence = torch.cat([wordvecs, tagvecs], 2)
+
+        hidden1 = self.hidden1
+        hidden2 = self.hidden2
+        if sentence.size(1) > 1:
+            if sentence.size(1) == self.batch_size:
+                hidden1 = self.hidden1_batch
+                hidden2 = self.hidden2_batch
+            else:
+                weight1 = next(self.lstm1.parameters()).data
+                hidden1 = (autograd.Variable(weight1.new(2, sentence.size(1), self.lstm_units).zero_()),
+                           autograd.Variable(weight1.new(2, sentence.size(1), self.lstm_units).zero_()))
+                weight2 = next(self.lstm2.parameters()).data
+                hidden2 = (autograd.Variable(weight2.new(2, sentence.size(1), self.lstm_units).zero_()),
+                           autograd.Variable(weight2.new(2, sentence.size(1), self.lstm_units).zero_()))
+
+        lstm_out1, hidden1 = self.lstm1(sentence, hidden1)
+        fwd1, back1 = torch.split(lstm_out1, self.lstm_units, dim=2)
+        if self.droprate > 0 and not test:
+            lstm_out1 = self.drop(lstm_out1)
+        lstm_out2, hidden2 = self.lstm2(lstm_out1, hidden2)
+        fwd2, back2 = torch.split(lstm_out2, self.lstm_units, dim=2)
+        fwd = torch.cat([fwd1, fwd2], 2)
+        back = torch.cat([back1, back2],2)
+        return fwd, back
+
+
+    def init_hidden(self, batch_size=1):
+        self.batch_size = batch_size
+        num_layers = 1
+
+        weight1 = next(self.lstm1.parameters()).data
+        hidden1 = (autograd.Variable(weight1.new(num_layers * 2, 1, self.lstm_units).zero_()),
+                   autograd.Variable(weight1.new(num_layers * 2, 1, self.lstm_units).zero_()))
+
+        weight2 = next(self.lstm2.parameters()).data
+        hidden2 = (autograd.Variable(weight2.new(num_layers * 2, 1, self.lstm_units).zero_()),
+                   autograd.Variable(weight2.new(num_layers * 2, 1, self.lstm_units).zero_()))
+
+        hidden1_batch = (autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
+                         autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+
+        hidden2_batch = (autograd.Variable(weight2.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
+                         autograd.Variable(weight2.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
+        
+        if self.GPU is not None:
+            hidden1 = tuple((x.cuda(self.GPU) for x in hidden1))
+            hidden2 = tuple((x.cuda(self.GPU) for x in hidden2))
+            hidden1_batch = tuple((x.cuda(self.GPU) for x in hidden1_batch))
+            hidden2_batch = tuple((x.cuda(self.GPU) for x in hidden2_batch))
+
+        self.hidden1 = hidden1
+        self.hidden2 = hidden2
+        self.hidden1_batch = hidden1_batch
+        self.hidden2_batch = hidden2_batch
+
+
     
 
 class Network:
@@ -54,41 +190,54 @@ class Network:
         self.batch_size = 1
 
         self.drop = nn.Dropout(droprate)
-        self.activation = nn.functional.relu
+        #self.activation = nn.functional.relu
         self.word_embed = nn.Embedding(word_count, word_dims)
         self.tag_embed = nn.Embedding(tag_count, tag_dims)
 
         self.lstm1 = nn.LSTM(word_dims + tag_dims, lstm_units, bidirectional=True)
         self.lstm2 = nn.LSTM(2 * lstm_units, lstm_units, bidirectional=True)
+        #self.lstm = LSTM(word_dims, tag_dims, lstm_units, droprate, GPU)
 
+        self.struct = Action(struct_spans, lstm_units, hidden_units, struct_out, droprate, GPU)
+        self.label = Action(label_spans, lstm_units, hidden_units, label_out, droprate, GPU)
+
+        """
         self.struct_hidden_W = nn.Linear(4 * struct_spans * lstm_units, hidden_units)
         self.struct_output_W = nn.Linear(hidden_units, struct_out)
 
         self.label_hidden_W = nn.Linear(4 * label_spans * lstm_units, hidden_units)
         self.label_output_W = nn.Linear(hidden_units, label_out)
+        """
 
         if GPU is not None:
             self.drop = self.drop.cuda(GPU)
             self.word_embed = self.word_embed.cuda(GPU)
             self.tag_embed = self.tag_embed.cuda(GPU)
 
+            
             self.lstm1 = self.lstm1.cuda(GPU)
             self.lstm2 = self.lstm2.cuda(GPU)
 
+            """
             self.struct_hidden_W = self.struct_hidden_W.cuda(GPU)
             self.struct_output_W = self.struct_output_W.cuda(GPU)
             self.label_hidden_W = self.label_hidden_W.cuda(GPU)
             self.label_output_W = self.label_output_W.cuda(GPU)
+            """
 
-        self.trainer = optim.Adadelta([x for x in self.word_embed.parameters()] +
-                                      [x for x in self.tag_embed.parameters()] + 
-                                      [x for x in self.lstm1.parameters()] +
-                                      [x for x in self.lstm2.parameters()] +
-                                      [x for x in self.struct_hidden_W.parameters()] + 
-                                      [x for x in self.struct_output_W.parameters()] + 
-                                      [x for x in self.label_hidden_W.parameters()] + 
-                                      [x for x in self.label_output_W.parameters()],
-                                      rho=0.99, eps=1e-7, weight_decay=1e-5)
+        parameters = [x for x in self.word_embed.parameters()] + \
+                     [x for x in self.tag_embed.parameters()] + \
+                     [x for x in self.lstm1.parameters()] + \
+                     [x for x in self.lstm2.parameters()] + \
+                     [x for x in self.struct.parameters()] + \
+                     [x for x in self.label.parameters()]
+                     #[x for x in self.struct_hidden_W.parameters()] + \
+                     #[x for x in self.struct_output_W.parameters()] + \
+                     #[x for x in self.label_hidden_W.parameters()] + \
+                     #[x for x in self.label_output_W.parameters()]
+                     #[x for x in self.lstm.parameters()] + \        
+
+        self.trainer = optim.Adadelta(parameters, rho=0.99, eps=1e-7, weight_decay=1e-5)
         self.init_weights()
 
 
@@ -97,27 +246,22 @@ class Network:
         self.tag_embed.eval()
         self.lstm1.eval()
         self.lstm2.eval()
-        self.struct_hidden_W.eval()
-        self.struct_output_W.eval()
-        self.label_hidden_W.eval()
-        self.label_output_W.eval()
-
+        #self.struct.eval()
+        #self.label.eval()
     
     def train_mode(self):
         self.word_embed.train()
         self.tag_embed.train()
         self.lstm1.train()
         self.lstm2.train()
-        self.struct_hidden_W.train()
-        self.struct_output_W.train()
-        self.label_hidden_W.train()
-        self.label_output_W.train()
-
+        #self.struct.train()
+        #self.label.train()
 
     def init_weights(self):
         initrange = 0.01
         self.word_embed.weight.data.uniform_(-initrange, initrange)
         self.tag_embed.weight.data.uniform_(-initrange, initrange)
+
 
 
     def init_hidden(self, batch_size=1):
@@ -131,7 +275,6 @@ class Network:
         weight2 = next(self.lstm2.parameters()).data
         hidden2 = (autograd.Variable(weight2.new(num_layers * 2, 1, self.lstm_units).zero_()),
                    autograd.Variable(weight2.new(num_layers * 2, 1, self.lstm_units).zero_()))
-
 
         hidden1_batch = (autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()),
                          autograd.Variable(weight1.new(num_layers * 2, batch_size, self.lstm_units).zero_()))
@@ -151,6 +294,7 @@ class Network:
         self.hidden2_batch = hidden2_batch
 
 
+
     def pad(self, tensor, length):
         if length - tensor.size(0) == 0:
             return tensor.view(tensor.size(0), 1)
@@ -164,6 +308,9 @@ class Network:
 
 
     def evaluate_recurrent(self, word_inds, tag_inds, test=False):
+        #return self.lstm(word_inds, tag_inds, self.word_embed, self.tag_embed, test)
+
+
         if test:
             self.evaluate_mode()
         else:
@@ -199,67 +346,6 @@ class Network:
         return fwd, back
 
 
-    def evaluate_struct(self, fwd_out, back_out, indices, test=False):
-        if test:
-            self.evaluate_mode()
-        else:
-            self.train_mode()
-
-        scores = []
-        span_vecs = []
-        for lefts, rights in indices:
-            fwd_span_out = []
-            for left_index, right_index in zip(lefts, rights):
-                fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
-            fwd_span_vec = torch.cat(fwd_span_out)
-            back_span_out = []
-            for left_index, right_index in zip(lefts, rights):
-                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-            back_span_vec = torch.cat(back_span_out)
-            
-            vec = torch.cat([fwd_span_vec, back_span_vec])
-            span_vecs.append(vec.view(1, vec.size(0)))
-        hidden_input = torch.cat(span_vecs)
-        if self.droprate > 0 and not test:
-            hidden_input = self.drop(hidden_input)
-        hidden_output = self.activation(self.struct_hidden_W(hidden_input))
-        scores = self.struct_output_W(hidden_output)
-        return scores
-
-
-    def evaluate_label(self, fwd_out, back_out, indices, test=False):
-        if test:
-            self.evaluate_mode()
-        else:
-            self.train_mode()
-
-        scores = []
-        span_vecs = []
-
-        for lefts, rights in indices:
-            fwd_span_out = []
-            for left_index, right_index in zip(lefts, rights):
-                fwd_span_out.append(fwd_out[right_index] - fwd_out[left_index - 1])
-            fwd_span_vec = torch.cat(fwd_span_out)
-            back_span_out = []
-            for left_index, right_index in zip(lefts, rights):
-                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-            back_span_vec = torch.cat(back_span_out)
-
-            vec = torch.cat([fwd_span_vec, back_span_vec])
-            span_vecs.append(vec.view(1, vec.size(0)))
-
-        hidden_input = torch.cat(span_vecs)
-        #hidden_input = hidden_input.view(1, hidden_input.size(0))
-
-        if self.droprate > 0 and not test:
-            hidden_input = self.drop(hidden_input)
-        
-        hidden_output = self.activation(self.label_hidden_W(hidden_input))
-        scores = self.label_output_W(hidden_output)
-        return scores
-
-
     def save(self, filename):
         """
         Saves the model using Torch's save functionality.
@@ -269,11 +355,13 @@ class Network:
             "tag_embed_state_dict": self.tag_embed.state_dict(),
             "lstm1_state_dict": self.lstm1.state_dict(),
             "lstm2_state_dict": self.lstm2.state_dict(),
-            "struct_hidden_W_state_dict": self.struct_hidden_W.state_dict(),
-            "struct_output_W_state_dict": self.struct_output_W.state_dict(),
-            "label_hidden_W_state_dict": self.label_hidden_W.state_dict(),
-            "label_output_W_state_dict": self.label_output_W.state_dict(),
-
+            #"struct_hidden_W_state_dict": self.struct_hidden_W.state_dict(),
+            #"struct_output_W_state_dict": self.struct_output_W.state_dict(),
+            #"label_hidden_W_state_dict": self.label_hidden_W.state_dict(),
+            #"label_output_W_state_dict": self.label_output_W.state_dict(),
+            #"lstm_state_dict": self.lstm.state_dict(),
+            "struct_state_dict": self.struct.state_dict(),
+            "label_state_dict": self.label.state_dict(),
 
             "word_count": self.word_count,
             "tag_count": self.tag_count,
@@ -316,10 +404,14 @@ class Network:
         network.tag_embed.load_state_dict(checkpoint["tag_embed_state_dict"])
         network.lstm1.load_state_dict(checkpoint["lstm1_state_dict"])
         network.lstm2.load_state_dict(checkpoint["lstm2_state_dict"])
-        network.struct_hidden_W.load_state_dict(checkpoint["struct_hidden_W_state_dict"])
-        network.struct_output_W.load_state_dict(checkpoint["struct_output_W_state_dict"])
-        network.label_hidden_W.load_state_dict(checkpoint["label_hidden_W_state_dict"])
-        network.label_output_W.load_state_dict(checkpoint["label_output_W_state_dict"])
+        #network.struct_hidden_W.load_state_dict(checkpoint["struct_hidden_W_state_dict"])
+        #network.struct_output_W.load_state_dict(checkpoint["struct_output_W_state_dict"])
+        #network.label_hidden_W.load_state_dict(checkpoint["label_hidden_W_state_dict"])
+        #network.label_output_W.load_state_dict(checkpoint["label_output_W_state_dict"])
+
+        #network.lstm.load_state_dict(checkpoint["lstm_state_dict"])
+        network.struct.load_state_dict(checkpoint["struct_state_dict"])
+        network.label.load_state_dict(checkpoint["label_state_dict"])
         network.init_hidden()
 
         return network
@@ -407,6 +499,7 @@ class Network:
             np.random.shuffle(training_data)
 
             for b in xrange(num_batches):
+                network.trainer.zero_grad()
                 batch = training_data[(b * batch_size) : ((b + 1) * batch_size)]
                 
                 explore = [
@@ -426,7 +519,6 @@ class Network:
 
                 sorted_batch = []
                 for example in batch:
-
                     ## random UNKing ##
                     for (i, w) in enumerate(example['w']):
                         if w <= 2:
@@ -436,16 +528,6 @@ class Network:
                         r = np.random.random()
                         if r < drop_prob:
                             example['w'][i] = 0
-
-                    """
-                    fwd, back = network.evaluate_recurrent(
-                        example['w'],
-                        example['t'],
-                    )
-                    """
-                    #w_batch.append(example['w'])
-                    #t_batch.append(example['t'])
-
                     sorted_batch.append((example['w'], example['t'], example))
                     
                 sorted_batch = sorted(sorted_batch, key=lambda x:x[0].size(0), reverse=True)
@@ -466,7 +548,9 @@ class Network:
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)
-                    scores = network.evaluate_struct(fwd, back, indices)
+
+                    scores = network.struct(fwd, back, indices)
+                    #scores = network.evaluate_struct(fwd, back, indices)
                     for i in xrange(len(targets)):
                         score = scores[i]
                         target = targets[i]
@@ -481,7 +565,9 @@ class Network:
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)
-                    scores = network.evaluate_label(fwd, back, indices)
+
+                    scores = network.label(fwd, back, indices)
+                    #scores = network.evaluate_label(fwd, back, indices)
                     for i in xrange(len(targets)):
                         score = scores[i]
                         target = targets[i]
@@ -490,7 +576,7 @@ class Network:
                     total_states += len(example['label_data'])
 
                 batch_loss = torch.sum(torch.cat(errors))
-                network.trainer.zero_grad()
+                #network.trainer.zero_grad()
                 batch_loss.backward()
                 network.trainer.step()
                 
