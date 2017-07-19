@@ -294,7 +294,6 @@ class Network:
         self.hidden2_batch = hidden2_batch
 
 
-
     def pad(self, tensor, length):
         if length - tensor.size(0) == 0:
             return tensor.view(tensor.size(0), 1)
@@ -309,7 +308,6 @@ class Network:
 
     def evaluate_recurrent(self, word_inds, tag_inds, test=False):
         #return self.lstm(word_inds, tag_inds, self.word_embed, self.tag_embed, test)
-
 
         if test:
             self.evaluate_mode()
