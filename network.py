@@ -182,11 +182,7 @@ class Network:
             fwd_span_vec = torch.cat(fwd_span_out, 1)
             back_span_out = []
             for left_index, right_index in zip(lefts, rights):
-                if left_index == right_index + 1:
-                    back_span_out.append(back_out[0] - back_out[0])
-                else:
-                    back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-
+                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
             back_span_vec = torch.cat(back_span_out, 1)
             span_vecs.append(torch.cat([fwd_span_vec, back_span_vec], 1))
         hidden_input = torch.cat(span_vecs)
@@ -215,11 +211,7 @@ class Network:
             fwd_span_vec = torch.cat(fwd_span_out, 1)
             back_span_out = []
             for left_index, right_index in zip(lefts, rights):
-                if left_index == right_index + 1:
-                    back_span_out.append(back_out[0] - back_out[0])
-                else:
-                    back_span_out.append(back_out[left_index] - back_out[right_index + 1])
-
+                back_span_out.append(back_out[left_index] - back_out[right_index + 1])
             back_span_vec = torch.cat(back_span_out, 1)
             span_vecs.append(torch.cat([fwd_span_vec, back_span_vec], 1))
         hidden_input = torch.cat(span_vecs)
