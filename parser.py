@@ -16,11 +16,12 @@ from phrase_tree import PhraseTree, FScore
 
 class Parser(object):
   
-    def __init__(self, n):
+    def __init__(self, sentence):
         """
         Initial state for parsing an n-word sentence.
         """
-        self.n = n
+        self.sentence = sentence
+        self.n = len(sentence)
         self.i = 0
         self.stack = []
 
@@ -35,7 +36,9 @@ class Parser(object):
 
     def shift(self):
         j = self.i  # (index of shifted word)
-        treelet = PhraseTree(leaf=j)
+        treelet = PhraseTree(symbol=self.sentence[j][1], 
+                             leaf=j, 
+                             sentence=self.sentence)
         self.stack.append((j, j, [treelet]))
         self.i += 1
 
@@ -47,10 +50,11 @@ class Parser(object):
 
 
     def label(self, nonterminals=[]):
-
         for nt in nonterminals:
             (left, right, trees) = self.stack.pop()
-            tree = PhraseTree(symbol=nt, children=trees)
+            tree = PhraseTree(symbol=nt, 
+                              children=trees, 
+                              sentence=self.sentence)
             self.stack.append((left, right, [tree]))
 
 
@@ -193,7 +197,7 @@ class Parser(object):
     @staticmethod
     def gold_actions(tree):
         n = len(tree.sentence)
-        state = Parser(n)
+        state = Parser(tree.sentence)
         result = []
 
         for step in range(2 * n - 1):
@@ -232,7 +236,7 @@ class Parser(object):
         l_features = []
 
         n = len(tree.sentence)
-        state = Parser(n)
+        state = Parser(tree.sentence)
         result = []
 
         for step in range(2 * n - 1):
@@ -269,7 +273,7 @@ class Parser(object):
         sentence = tree.sentence
 
         n = len(sentence)
-        state = Parser(n)
+        state = Parser(sentence)
 
 
         w = autograd.Variable(torch.LongTensor([int(x) for x in data['w']]))
@@ -348,7 +352,8 @@ class Parser(object):
     @staticmethod
     def parse(sentence, fm, network, tree):
         n = len(sentence)
-        state = Parser(n)
+        state = Parser(sentence)
+        network.init_hidden()
 
         w, t = fm.sentence_sequences(sentence)
 
@@ -400,6 +405,14 @@ class Parser(object):
         for tree in trees:
             predicted = Parser.parse(tree.sentence, fm, network,  tree)
             local_accuracy = predicted.compare(tree)
+
+            """
+            print(local_accuracy)
+            print(predicted.pretty())
+            print(tree.pretty())
+            raw_input()
+            """
+
             accuracy += local_accuracy
         return accuracy
 

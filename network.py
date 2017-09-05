@@ -388,6 +388,7 @@ class Network:
                 batch = [example for (example, _) in explore]
                 errors = []
 
+                network.init_hidden()
                 for example in batch:
 
                     ## random UNKing ##
@@ -409,6 +410,15 @@ class Network:
                     for (left, right), correct in example['struct_data'].items():
                         indices.append((left,right))
                         targets.append(correct)
+
+
+                    """
+                    print(example['w'])
+                    print(indices)
+                    print(targets)
+                    raw_input()
+                    """
+
                     targets = autograd.Variable(torch.LongTensor(targets))
                     if network.GPU is not None:
                         targets = targets.cuda(network.GPU)

@@ -97,7 +97,7 @@ class FeatureMapper(object):
             self.word_freq = data['word_freq']
             self.tdict = data['tdict']
             self.ldict = data['ldict']
-
+            
             self.word_freq_list = []
             for word in self.wdict.keys():
                 if word in self.word_freq:
@@ -114,6 +114,7 @@ class FeatureMapper(object):
         new.tdict = data['tdict']
         new.ldict = data['ldict']
         new.word_freq_list = data['word_freq_list']
+
         return new
 
 
@@ -123,7 +124,7 @@ class FeatureMapper(object):
             'word_freq': self.word_freq,
             'tdict': self.tdict,
             'ldict': self.ldict,
-            'word_freq_list': self.word_freq_list
+            'word_freq_list': self.word_freq_list,
         }
 
 
